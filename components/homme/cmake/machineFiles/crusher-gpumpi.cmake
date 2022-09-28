@@ -39,12 +39,12 @@ SET(CMAKE_C_COMPILER "cc" CACHE STRING "")
 SET(CMAKE_Fortran_COMPILER "ftn" CACHE STRING "")
 SET(CMAKE_CXX_COMPILER "hipcc" CACHE STRING "")
 #SET(CMAKE_CXX_COMPILER "/ccs/home/onguba/kokkos/bin/nvcc_wrapper" CACHE STRING "")
-SET(E3SM_KOKKOS_PATH "/ccs/home/onguba/kokkos-crusher-june2022/bld-hipcc" CACHE STRING "")
+SET(E3SM_KOKKOS_PATH "/gpfs/alpine/cli115/proj-shared/trey/for-support-june2022-crusher/build-kokkos/bld-kokkos-hipcc" CACHE STRING "")
 
 #not the proper way!!!
-SET(MPICH_DIR "/opt/cray/pe/mpich/8.1.12/ofi/crayclang/10.0" CACHE STRING "")
+#SET(MPICH_DIR "/opt/cray/pe/mpich/8.1.12/ofi/crayclang/10.0" CACHE STRING "")
 
-SET(Extrae_LIBRARY "-I${MPICH_DIR}/include -L${MPICH_DIR}/lib -lmpi -L/opt/cray/pe/mpich/8.1.12/gtl/lib -lmpi_gtl_hsa" CACHE STRING "")
+SET(Extrae_LIBRARY "-I$ENV{MPICH_DIR}/include -L$ENV{MPICH_DIR}/lib -lmpi $ENV{PE_MPICH_GTL_DIR_amd_gfx90a} $ENV{PE_MPICH_GTL_LIBS_amd_gfx90a}" CACHE STRING "")
 
 SET(ADD_Fortran_FLAGS "-O3 -DNDEBUG ${Extrae_LIBRARY} -I${E3SM_KOKKOS_PATH}/include -L${E3SM_KOKKOS_PATH}/lib64" CACHE STRING "")
 SET(ADD_C_FLAGS "-O3 -DNDEBUG ${Extrae_LIBRARY} -I${E3SM_KOKKOS_PATH}/include -L${E3SM_KOKKOS_PATH}/lib64" CACHE STRING "")
