@@ -438,14 +438,23 @@ public:
     ExecSpace::impl_static_fence();
     m_kernel_will_run_limiters = true;
     {
+      static constexpr int NPNP = NP * NP;
+      static_assert(warpSize % NPNP == 0, "Warp not divisible by NP*NP");
+      static constexpr int TEAM_LEV = warpSize / NPNP;
+      static_assert(NUM_LEV % TEAM_LEV == 0, "NUM_LEV not divisible by TEAM_LEV");
+      static constexpr int LEV_BLOCKS = NUM_LEV / TEAM_LEV;
+      static constexpr int TEAM_SIZE = NPNP * TEAM_LEV;
+      static constexpr int NPL = NP * TEAM_LEV;
+
       using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
       using Team = TeamPolicy::member_type;
       using Scratch = ExecSpace::scratch_memory_space; 
       using ScratchNPNP = Kokkos::View<Scalar[NP][NP], Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-      using Scratch2NPNP = Kokkos::View<Scalar[2][NP][NP], Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+      using Scratch2NPNPL = Kokkos::View<Scalar[2][NP][NP][TEAM_LEV], Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
 
       const int ne = m_geometry.num_elems();
       const int nq = m_data.qsize;
+      const int nql = nq * LEV_BLOCKS;
       const auto &qdp = m_tracers.qdp;
       const auto &vstar = m_buffers.vstar;
       const int n0_qdp = m_data.n0_qdp;
@@ -457,45 +466,43 @@ public:
       auto &qtens = m_tracers.qtens_biharmonic;
       const Real rrearth = m_sphere_ops.m_rrearth;
 
-      static constexpr int NPNP = NP * NP;
-      static_assert(warpSize % NPNP == 0, "Warp not divisible by NP*NP");
-      static constexpr int chunk = NPNP / warpSize;
-
-      Kokkos::parallel_for(TeamPolicy(ne * nq * NUM_LEV, NPNP).set_chunk_size(chunk).set_scratch_size(0,Kokkos::PerTeam(3 * NPNP * sizeof(Scalar))),
-        KOKKOS_LAMBDA(const Team team) {
+      Kokkos::parallel_for(TeamPolicy(ne * nql, TEAM_SIZE).set_scratch_size(0,Kokkos::PerTeam((2 * TEAM_SIZE + NPNP) * sizeof(Scalar))),
+        KOKKOS_LAMBDA(const Team &team) {
           const int lr = team.league_rank();
-          const int nql = nq * NUM_LEV;
           const int ie = lr / nql;
-          const int de = lr - ie * nql;
-          const int iq = de / NUM_LEV;
-          const int iz = de - iq * NUM_LEV;
+          const int jq = lr - ie * nql;
+          const int iq = jq / LEV_BLOCKS;
 
           const int tr = team.team_rank();
-          const int ix = tr / NP;
-          const int iy = tr - ix * NP;
+          const int ix = tr / NPL;
+          const int jy = tr - ix * NPL;
+          const int iy = jy / TEAM_LEV;
+          const int iz = jy - iy * TEAM_LEV; 
+
+          const int jz = iz + jq * TEAM_LEV - iq * NUM_LEV;
 
           ScratchNPNP dd(team.team_scratch(0));
-          dd(ix,iy) = dvv(ix,iy);
+          if (iz == 0) dd(ix,iy) = dvv(ix,iy);
 
-          const Scalar qdpxyz = qdp(ie,n0_qdp,iq,ix,iy,iz);
+          const Scalar qdpxyz = qdp(ie,n0_qdp,iq,ix,iy,jz);
           const Real metdetxy = metdet(ie,ix,iy);
           const Scalar qdpm = qdpxyz * metdetxy;
-          const Scalar v0 = vstar(ie,0,ix,iy,iz) * qdpm;
-          const Scalar v1 = vstar(ie,1,ix,iy,iz) * qdpm;
-          Scratch2NPNP gv(team.team_scratch(0)); 
-          gv(0,ix,iy) = d_inv(ie,0,0,ix,iy) * v0 + d_inv(ie,1,0,ix,iy) * v1;
-          gv(1,ix,iy) = d_inv(ie,0,1,ix,iy) * v0 + d_inv(ie,1,1,ix,iy) * v1;
+          const Scalar v0 = vstar(ie,0,ix,iy,jz) * qdpm;
+          const Scalar v1 = vstar(ie,1,ix,iy,jz) * qdpm;
+          Scratch2NPNPL gv(team.team_scratch(0)); 
+          gv(0,ix,iy,iz) = d_inv(ie,0,0,ix,iy) * v0 + d_inv(ie,1,0,ix,iy) * v1;
+          gv(1,ix,iy,iz) = d_inv(ie,0,1,ix,iy) * v0 + d_inv(ie,1,1,ix,iy) * v1;
 
           team.team_barrier();
 
           Scalar duv(0);
-          for (int j = 0; j < NP; j++) {
-            duv += dd(iy,j) * gv(0,ix,j) + dd(ix,j) * gv(1,j,iy);
+          for (int k = 0; k < NP; k++) {
+            duv += dd(iy,k) * gv(0,ix,k,iz) + dd(ix,k) * gv(1,k,iy,iz);
           }
-          Scalar &qtensxyz = qtens(ie,iq,ix,iy,iz);
+          Scalar &qtensxyz = qtens(ie,iq,ix,iy,jz);
           const Scalar hv = add_hyperviscosity ? qtensxyz : 0;
           Scalar q = qdpxyz + alpha * duv * (1.0 / metdetxy) * rrearth + hv;
-          printf("qtens %d %d %d %d %d TREY %g %g %g %g %g %g\n",ie,iq,ix,iy,iz,qdpxyz[0],alpha,duv[0],metdetxy,rrearth,q[0]);
+          printf("qtens %d %d %d %d %d TREY %g %g %g %g %g %g\n",ie,iq,ix,iy,jz,qdpxyz[0],alpha,duv[0],metdetxy,rrearth,q[0]);
         });
     }
     Kokkos::parallel_for(
