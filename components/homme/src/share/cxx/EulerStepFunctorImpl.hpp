@@ -501,8 +501,7 @@ public:
           }
           Scalar &qtensxyz = qtens(ie,iq,ix,iy,jz);
           const Scalar hv = add_hyperviscosity ? qtensxyz : 0;
-          Scalar q = qdpxyz + alpha * duv * (1.0 / metdetxy) * rrearth + hv;
-          printf("qtens %d %d %d %d %d TREY %g %g %g %g %g %g\n",ie,iq,ix,iy,jz,qdpxyz[0],alpha,duv[0],metdetxy,rrearth,q[0]);
+          qtensxyz = qdpxyz + alpha * duv * (1.0 / metdetxy) * rrearth + hv;
         });
     }
     Kokkos::parallel_for(
@@ -512,8 +511,8 @@ public:
         m_geometry.num_elems() * m_data.qsize, m_tpref),
       *this);
     ExecSpace::impl_static_fence();
-    fflush(stdout);
-    exit(0);
+    //fflush(stdout);
+    //exit(0);
     m_kernel_will_run_limiters = false;
     profiling_pause();
   }
@@ -749,8 +748,8 @@ private:
 
   KOKKOS_INLINE_FUNCTION
   void run_tracer_phase (const KernelVariables& kv) const {
-    compute_qtens(kv);
-    kv.team_barrier();
+    //compute_qtens(kv);
+    //kv.team_barrier();
     if (m_data.limiter_option == 8) {
       limiter_optim_iter_full(kv);
       kv.team_barrier();
