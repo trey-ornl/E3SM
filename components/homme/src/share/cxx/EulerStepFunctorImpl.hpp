@@ -440,6 +440,9 @@ public:
     {
       using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
       using Team = TeamPolicy::member_type;
+      using Scratch = ExecSpace::scratch_memory_space; 
+      using ScratchNPNP = Kokkos::View<Scalar[NP][NP], Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+      using Scratch2NPNP = Kokkos::View<Scalar[2][NP][NP], Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
 
       const int ne = m_geometry.num_elems();
       const int nq = m_data.qsize;
@@ -448,12 +451,17 @@ public:
       const int n0_qdp = m_data.n0_qdp;
       const auto &d_inv = m_sphere_ops.m_dinv;
       const auto &metdet = m_sphere_ops.m_metdet;
+      const auto &dvv = m_sphere_ops.dvv;
+      const Real alpha = -m_data.dt;
+      const bool add_hyperviscosity = (m_data.rhs_viss != 0.0);
+      auto &qtens = m_tracers.qtens_biharmonic;
+      const Real rrearth = m_sphere_ops.m_rrearth;
 
       static constexpr int NPNP = NP * NP;
       static_assert(warpSize % NPNP == 0, "Warp not divisible by NP*NP");
       static constexpr int chunk = NPNP / warpSize;
 
-      Kokkos::parallel_for(TeamPolicy(ne * nq * NUM_LEV, NPNP).set_chunk_size(chunk),
+      Kokkos::parallel_for(TeamPolicy(ne * nq * NUM_LEV, NPNP).set_chunk_size(chunk).set_scratch_size(0,Kokkos::PerTeam(3 * NPNP * sizeof(Scalar))),
         KOKKOS_LAMBDA(const Team team) {
           const int lr = team.league_rank();
           const int nql = nq * NUM_LEV;
@@ -466,12 +474,28 @@ public:
           const int ix = tr / NP;
           const int iy = tr - ix * NP;
 
-          const auto qdpxyz = qdp(ie,n0_qdp,iq,ix,iy,iz) * metdet(ie,ix,iy);
-          const auto v0 = vstar(ie,0,ix,iy,iz) * qdpxyz;
-          const auto v1 = vstar(ie,1,ix,iy,iz) * qdpxyz;
-          const auto gv0 = d_inv(ie,0,0,ix,iy) * v0 + d_inv(ie,1,0,ix,iy) * v1;
-          const auto gv1 = d_inv(ie,0,1,ix,iy) * v0 + d_inv(ie,1,1,ix,iy) * v1;
-          printf("gv0 %d %d %d %d %d TREY %g\n",ie,iq,ix,iy,iz,gv0[0]);
+          ScratchNPNP dd(team.team_scratch(0));
+          dd(ix,iy) = dvv(ix,iy);
+
+          const Scalar qdpxyz = qdp(ie,n0_qdp,iq,ix,iy,iz);
+          const Real metdetxy = metdet(ie,ix,iy);
+          const Scalar qdpm = qdpxyz * metdetxy;
+          const Scalar v0 = vstar(ie,0,ix,iy,iz) * qdpm;
+          const Scalar v1 = vstar(ie,1,ix,iy,iz) * qdpm;
+          Scratch2NPNP gv(team.team_scratch(0)); 
+          gv(0,ix,iy) = d_inv(ie,0,0,ix,iy) * v0 + d_inv(ie,1,0,ix,iy) * v1;
+          gv(1,ix,iy) = d_inv(ie,0,1,ix,iy) * v0 + d_inv(ie,1,1,ix,iy) * v1;
+
+          team.team_barrier();
+
+          Scalar duv(0);
+          for (int j = 0; j < NP; j++) {
+            duv += dd(iy,j) * gv(0,ix,j) + dd(ix,j) * gv(1,j,iy);
+          }
+          Scalar &qtensxyz = qtens(ie,iq,ix,iy,iz);
+          const Scalar hv = add_hyperviscosity ? qtensxyz : 0;
+          Scalar q = qdpxyz + alpha * duv * (1.0 / metdetxy) * rrearth + hv;
+          printf("qtens %d %d %d %d %d TREY %g %g %g %g %g %g\n",ie,iq,ix,iy,iz,qdpxyz[0],alpha,duv[0],metdetxy,rrearth,q[0]);
         });
     }
     Kokkos::parallel_for(
