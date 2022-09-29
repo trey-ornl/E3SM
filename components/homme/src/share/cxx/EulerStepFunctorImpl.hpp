@@ -437,6 +437,43 @@ public:
       *this);
     ExecSpace::impl_static_fence();
     m_kernel_will_run_limiters = true;
+    {
+      using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
+      using Team = TeamPolicy::member_type;
+
+      const int ne = m_geometry.num_elems();
+      const int nq = m_data.qsize;
+      const auto &qdp = m_tracers.qdp;
+      const auto &vstar = m_buffers.vstar;
+      const int n0_qdp = m_data.n0_qdp;
+      const auto &d_inv = m_sphere_ops.m_dinv;
+      const auto &metdet = m_sphere_ops.m_metdet;
+
+      static constexpr int NPNP = NP * NP;
+      static_assert(warpSize % NPNP == 0, "Warp not divisible by NP*NP");
+      static constexpr int chunk = NPNP / warpSize;
+
+      Kokkos::parallel_for(TeamPolicy(ne * nq * NUM_LEV, NPNP).set_chunk_size(chunk),
+        KOKKOS_LAMBDA(const Team team) {
+          const int lr = team.league_rank();
+          const int nql = nq * NUM_LEV;
+          const int ie = lr / nql;
+          const int de = lr - ie * nql;
+          const int iq = de / NUM_LEV;
+          const int iz = de - iq * NUM_LEV;
+
+          const int tr = team.team_rank();
+          const int ix = tr / NP;
+          const int iy = tr - ix * NP;
+
+          const auto qdpxyz = qdp(ie,n0_qdp,iq,ix,iy,iz) * metdet(ie,ix,iy);
+          const auto v0 = vstar(ie,0,ix,iy,iz) * qdpxyz;
+          const auto v1 = vstar(ie,1,ix,iy,iz) * qdpxyz;
+          const auto gv0 = d_inv(ie,0,0,ix,iy) * v0 + d_inv(ie,1,0,ix,iy) * v1;
+          const auto gv1 = d_inv(ie,0,1,ix,iy) * v0 + d_inv(ie,1,1,ix,iy) * v1;
+          printf("gv0 %d %d %d %d %d TREY %g\n",ie,iq,ix,iy,iz,gv0[0]);
+        });
+    }
     Kokkos::parallel_for(
       //to play with launch bounds
       //Homme::get_default_team_policy<ExecSpace, AALTracerPhase, Kokkos::LaunchBounds<128,1> >(
@@ -444,6 +481,8 @@ public:
         m_geometry.num_elems() * m_data.qsize, m_tpref),
       *this);
     ExecSpace::impl_static_fence();
+    fflush(stdout);
+    exit(0);
     m_kernel_will_run_limiters = false;
     profiling_pause();
   }

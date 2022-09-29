@@ -539,6 +539,7 @@ public:
         const auto v1 = vstar(1, igp, jgp, ilev) * qdpijk;
         gv(0,igp,jgp,ilev) = (D_inv(0,0,igp,jgp) * v0 + D_inv(1,0,igp,jgp) * v1) * metdet(igp,jgp);
         gv(1,igp,jgp,ilev) = (D_inv(0,1,igp,jgp) * v0 + D_inv(1,1,igp,jgp) * v1) * metdet(igp,jgp);
+        printf("gv0 %d %d %d %d %d E3SM %g\n",kv.ie,kv.iq,igp,jgp,ilev,gv(0,igp,jgp,ilev)[0]);
       });
     });
     kv.team_barrier();
