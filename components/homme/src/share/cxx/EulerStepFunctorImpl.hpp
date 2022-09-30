@@ -447,8 +447,6 @@ public:
       static constexpr int LEV_BLOCKS = NUM_LEV / TEAM_LEV;
       static constexpr int TEAM_SIZE = NPNP * TEAM_LEV;
       static constexpr int NPL = NP * TEAM_LEV;
-      static constexpr int MAXITER = NPNP - 1;
-      static constexpr Real TOL = 5e-14;
 
       using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
       using Team = TeamPolicy::member_type;
@@ -474,7 +472,7 @@ public:
       const auto &qlim = m_tracers.qlim;
 
       Kokkos::parallel_for(
-        TeamPolicy(ne * nql, TEAM_SIZE).set_scratch_size(0,Kokkos::PerTeam((2 * TEAM_SIZE + NPNP + 2 * TEAM_LEV) * sizeof(Real))),
+        TeamPolicy(ne * nql, TEAM_SIZE).set_scratch_size(0,Kokkos::PerTeam((2 * TEAM_SIZE + NPNP) * sizeof(Real))),
         KOKKOS_LAMBDA(const Team &team) {
           const int lr = team.league_rank();
           const int ie = lr / nql;
@@ -524,6 +522,7 @@ public:
           team.team_barrier();
 
           if ((ix == 0) && (iy == 0)) {
+
             Real xcsum = 0;
             Real csum = 0;
             for (int kx = 0; kx < NP; kx++) for (int ky = 0; ky < NP; ky++) {
@@ -531,10 +530,11 @@ public:
              csum += cxyz;
              xcsum += cxyz * x(kx,ky,iz);
             }
+
             if (csum > 0) {
 
-              Real minp = qlim(ie,iq,0,iz)[0];
-              Real maxp = qlim(ie,iq,1,iz)[0];
+              Real &minp = qlim(ie,iq,0,jz)[0];
+              Real &maxp = qlim(ie,iq,1,jz)[0];
               if (minp < 0) minp = 0;
 
               const bool islo = (xcsum < minp*csum);
@@ -544,8 +544,48 @@ public:
                 if (islo) minp = ratio;
                 if (ishi) maxp = ratio;
               }
+
+              static constexpr int MAXITER = NPNP - 1;
+              static constexpr Real TOL = 5e-14;
+              const Real tol = TOL*fabs(xcsum);
+
+              for (int iter = 0; iter < MAXITER; iter++) {
+
+                Real addmass = 0;
+                for (int kx = 0; kx < NP; kx++) for (int ky = 0; ky < NP; ky++) {
+                  Real &xk = x(kx,ky,iz);
+                  Real delta = 0;
+                  if (xk > maxp) {
+                    delta = xk - maxp;
+                    xk = maxp;
+                  } else if (xk < minp) {
+                    delta = xk - minp;
+                    xk = minp;
+                  }
+                  addmass += delta * c(kx,ky,iz);
+                }
+                if (fabs(addmass) <= tol) break;
+
+                const bool positive = (addmass > 0);
+                Real weightsum = 0;
+                for (int kx = 0; kx < NP; kx++) for (int ky = 0; ky < NP; ky++) {
+                  const Real xk = x(kx,ky,iz);
+                  const bool test = positive ? (xk < maxp) : (xk > minp);
+                  if (test) weightsum += c(kx,ky,iz);
+                }
+                const Real adw = addmass/weightsum;
+                for (int kx = 0; kx < NP; kx++) for (int ky = 0; ky < NP; ky++) {
+                  Real &xk = x(kx,ky,iz);
+                  const bool test = positive ? (xk < maxp) : (xk > minp);
+                  xk += test ? adw : 0;
+                }
+              }
             }
           }
+
+          team.team_barrier();
+
+          qtensxyz = x(ix,iy,iz) * dpm;
         });
     }
     Kokkos::parallel_for(
@@ -792,8 +832,9 @@ private:
 
   KOKKOS_INLINE_FUNCTION
   void run_tracer_phase (const KernelVariables& kv) const {
-    //compute_qtens(kv);
-    //kv.team_barrier();
+#if 0
+    compute_qtens(kv);
+    kv.team_barrier();
     if (m_data.limiter_option == 8) {
       limiter_optim_iter_full(kv);
       kv.team_barrier();
@@ -801,6 +842,7 @@ private:
       limiter_clip_and_sum(kv);
       kv.team_barrier();
     }
+#endif
     apply_spheremp(kv);
   }
 
