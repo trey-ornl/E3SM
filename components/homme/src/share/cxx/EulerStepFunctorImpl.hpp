@@ -429,6 +429,17 @@ public:
   struct AALSetupPhase {};
   struct AALTracerPhase {};
 
+  static __device__ Real allsum(const int lev, const Real x)
+  {
+    static constexpr int NPNP = NP*NP;
+    static constexpr int NLEV = warpSize/NPNP;
+
+    Real sum = x;
+    for (int i = NLEV; i < warpSize; i += i) sum += __shfl_down(sum,i);
+    sum = __shfl(sum,lev);
+    return sum;
+  }
+
   void advect_and_limit() {
     profiling_resume();
     Kokkos::parallel_for(
@@ -511,86 +522,59 @@ public:
           const Real hv = add_hyperviscosity ? qtensxyz : 0;
           qtensxyz = qdp0 + alpha * duv * (1.0 / metdetxy) * rrearth + hv;
 
-          team.team_barrier();
-
-          // Re-use gv
-          //
-          auto &x = gv1;
           const Real dpm = dpmass(ie,ix,iy,jz)[0];
-          x(ix,iy,iz) = qtensxyz / dpm;
+          const Real c = spheremp(ie,ix,iy) * dpm;
+          Real x = qtensxyz / dpm;
 
-          auto &c = gv0;
-          const Real spherempxy = spheremp(ie,ix,iy);
-          c(ix,iy,iz) = spherempxy * dpm;
+          const Real csum = allsum(iz, c);
+          const Real xcsum = allsum(iz, c * x);
+          
+          if (csum > 0) {
 
-          team.team_barrier();
+            Real minp = qlim(ie,iq,0,jz)[0];
+            Real maxp = qlim(ie,iq,1,jz)[0];
+            if (minp < 0) minp = 0;
 
-          if ((ix == 0) && (iy == 0)) {
-
-            Real csum = 0;
-            Real xcsum = 0;
-            for (int kx = 0; kx < NP; kx++) for (int ky = 0; ky < NP; ky++) {
-             const Real cxyz = c(kx,ky,iz);
-             csum += cxyz;
-             xcsum += cxyz * x(kx,ky,iz);
+            const bool islo = (xcsum < minp*csum);
+            const bool ishi = (xcsum > maxp*csum);
+            if (islo || ishi) {
+              const Real ratio = xcsum/csum;
+              if (islo) minp = ratio;
+              if (ishi) maxp = ratio;
             }
 
-            if (csum > 0) {
+            if ((ix == 0) && (iy == 0)) {
+              qlim(ie,iq,0,jz) = minp;
+              qlim(ie,iq,1,jz) = maxp;
+            }
 
-              Real &minp = qlim(ie,iq,0,jz)[0];
-              Real &maxp = qlim(ie,iq,1,jz)[0];
-              if (minp < 0) minp = 0;
+            static constexpr int MAXITER = NPNP - 1;
+            static constexpr Real TOL = 5e-14;
+            const Real tol = TOL*fabs(xcsum);
 
-              const bool islo = (xcsum < minp*csum);
-              const bool ishi = (xcsum > maxp*csum);
-              if (islo || ishi) {
-                const Real ratio = xcsum/csum;
-                if (islo) minp = ratio;
-                if (ishi) maxp = ratio;
+            for (int iter = 0; iter < MAXITER; iter++) {
+
+              Real delta = 0;
+              if (x > maxp) {
+                delta = x - maxp;
+                x = maxp;
+              } else if (x < minp) {
+                delta = x - minp;
+                x = minp;
               }
+              const Real addmass = allsum(iz, delta * c);
 
-              static constexpr int MAXITER = NPNP - 1;
-              static constexpr Real TOL = 5e-14;
-              const Real tol = TOL*fabs(xcsum);
+              if (fabs(addmass) <= tol) break;
 
-              for (int iter = 0; iter < MAXITER; iter++) {
-
-                Real addmass = 0;
-                for (int kx = 0; kx < NP; kx++) for (int ky = 0; ky < NP; ky++) {
-                  Real delta = 0;
-                  Real &xk = x(kx,ky,iz);
-                  if (xk > maxp) {
-                    delta = xk - maxp;
-                    xk = maxp;
-                  } else if (xk < minp) {
-                    delta = xk - minp;
-                    xk = minp;
-                  }
-                  addmass += delta * c(kx,ky,iz);
-                }
-                if (fabs(addmass) <= tol) break;
-
-                const bool positive = (addmass > 0);
-                Real weightsum = 0;
-                for (int kx = 0; kx < NP; kx++) for (int ky = 0; ky < NP; ky++) {
-                  const Real xk = x(kx,ky,iz);
-                  const bool test = positive ? (xk < maxp) : (xk > minp);
-                  if (test) weightsum += c(kx,ky,iz);
-                }
-                const Real adw = addmass/weightsum;
-                for (int kx = 0; kx < NP; kx++) for (int ky = 0; ky < NP; ky++) {
-                  Real &xk = x(kx,ky,iz);
-                  const bool test = positive ? (xk < maxp) : (xk > minp);
-                  xk += test ? adw : 0;
-                }
-              }
+              const bool test = (addmass > 0) ? (x < maxp) : (x > minp);
+              const Real weightsum = allsum(iz, test ? c : 0);
+              const Real adw = addmass/weightsum;
+              x += (test ? adw : 0);
             }
           }
 
-          team.team_barrier();
-
-          qtensxyz = x(ix,iy,iz) * dpm;
-          qdp(ie,np1_qdp,iq,ix,iy,jz) = spherempxy * qtensxyz;
+          qtensxyz = x * dpm;
+          qdp(ie,np1_qdp,iq,ix,iy,jz) = x * c; 
         });
     }
     Kokkos::parallel_for(
