@@ -437,7 +437,9 @@ public:
       *this);
     ExecSpace::impl_static_fence();
     m_kernel_will_run_limiters = true;
-    {
+
+    if (m_data.limiter_option == 8) {
+
       static constexpr int NPNP = NP * NP;
       static_assert(warpSize % NPNP == 0, "Warp not divisible by NP*NP");
       static constexpr int TEAM_LEV = warpSize / NPNP;
@@ -445,12 +447,14 @@ public:
       static constexpr int LEV_BLOCKS = NUM_LEV / TEAM_LEV;
       static constexpr int TEAM_SIZE = NPNP * TEAM_LEV;
       static constexpr int NPL = NP * TEAM_LEV;
+      static constexpr int MAXITER = NPNP - 1;
+      static constexpr Real TOL = 5e-14;
 
       using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
       using Team = TeamPolicy::member_type;
       using Scratch = ExecSpace::scratch_memory_space; 
-      using ScratchNPNP = Kokkos::View<Scalar[NP][NP], Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-      using Scratch2NPNPL = Kokkos::View<Scalar[2][NP][NP][TEAM_LEV], Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+      using ScratchNPNP = Kokkos::View<Real[NP][NP], Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+      using ScratchNPNPL = Kokkos::View<Real[NP][NP][TEAM_LEV], Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
 
       const int ne = m_geometry.num_elems();
       const int nq = m_data.qsize;
@@ -465,8 +469,12 @@ public:
       const bool add_hyperviscosity = (m_data.rhs_viss != 0.0);
       auto &qtens = m_tracers.qtens_biharmonic;
       const Real rrearth = m_sphere_ops.m_rrearth;
+      const auto &dpmass = m_buffers.dpdissk;
+      const auto &spheremp = m_geometry.m_spheremp;
+      const auto &qlim = m_tracers.qlim;
 
-      Kokkos::parallel_for(TeamPolicy(ne * nql, TEAM_SIZE).set_scratch_size(0,Kokkos::PerTeam((2 * TEAM_SIZE + NPNP) * sizeof(Scalar))),
+      Kokkos::parallel_for(
+        TeamPolicy(ne * nql, TEAM_SIZE).set_scratch_size(0,Kokkos::PerTeam((2 * TEAM_SIZE + NPNP + 2 * TEAM_LEV) * sizeof(Real))),
         KOKKOS_LAMBDA(const Team &team) {
           const int lr = team.league_rank();
           const int ie = lr / nql;
@@ -484,24 +492,60 @@ public:
           ScratchNPNP dd(team.team_scratch(0));
           if (iz == 0) dd(ix,iy) = dvv(ix,iy);
 
-          const Scalar qdpxyz = qdp(ie,n0_qdp,iq,ix,iy,jz);
+          const Real qdpxyz = qdp(ie,n0_qdp,iq,ix,iy,jz)[0];
           const Real metdetxy = metdet(ie,ix,iy);
-          const Scalar qdpm = qdpxyz * metdetxy;
-          const Scalar v0 = vstar(ie,0,ix,iy,jz) * qdpm;
-          const Scalar v1 = vstar(ie,1,ix,iy,jz) * qdpm;
-          Scratch2NPNPL gv(team.team_scratch(0)); 
-          gv(0,ix,iy,iz) = d_inv(ie,0,0,ix,iy) * v0 + d_inv(ie,1,0,ix,iy) * v1;
-          gv(1,ix,iy,iz) = d_inv(ie,0,1,ix,iy) * v0 + d_inv(ie,1,1,ix,iy) * v1;
+          const Real qdpm = qdpxyz * metdetxy;
+          const Real v0 = vstar(ie,0,ix,iy,jz)[0] * qdpm;
+          const Real v1 = vstar(ie,1,ix,iy,jz)[0] * qdpm;
+          ScratchNPNPL gv0(team.team_scratch(0)); 
+          gv0(ix,iy,iz) = d_inv(ie,0,0,ix,iy) * v0 + d_inv(ie,1,0,ix,iy) * v1;
+          ScratchNPNPL gv1(team.team_scratch(0)); 
+          gv1(ix,iy,iz) = d_inv(ie,0,1,ix,iy) * v0 + d_inv(ie,1,1,ix,iy) * v1;
 
           team.team_barrier();
 
-          Scalar duv(0);
+          Real duv = 0;
           for (int k = 0; k < NP; k++) {
-            duv += dd(iy,k) * gv(0,ix,k,iz) + dd(ix,k) * gv(1,k,iy,iz);
+            duv += dd(iy,k) * gv0(ix,k,iz) + dd(ix,k) * gv1(k,iy,iz);
           }
-          Scalar &qtensxyz = qtens(ie,iq,ix,iy,jz);
-          const Scalar hv = add_hyperviscosity ? qtensxyz : 0;
+          Real &qtensxyz = qtens(ie,iq,ix,iy,jz)[0];
+          const Real hv = add_hyperviscosity ? qtensxyz : 0;
           qtensxyz = qdpxyz + alpha * duv * (1.0 / metdetxy) * rrearth + hv;
+
+          team.team_barrier();
+
+          // Re-use gv
+          auto &c = gv0;
+          auto &x = gv1;
+          const Real dpm = dpmass(ie,ix,iy,jz)[0];
+          c(ix,iy,iz) = spheremp(ie,ix,iy) * dpm;
+          x(ix,iy,iz) = qtensxyz / dpm;
+
+          team.team_barrier();
+
+          if ((ix == 0) && (iy == 0)) {
+            Real xcsum = 0;
+            Real csum = 0;
+            for (int kx = 0; kx < NP; kx++) for (int ky = 0; ky < NP; ky++) {
+             const Real cxyz = c(kx,ky,iz);
+             csum += cxyz;
+             xcsum += cxyz * x(kx,ky,iz);
+            }
+            if (csum > 0) {
+
+              Real minp = qlim(ie,iq,0,iz)[0];
+              Real maxp = qlim(ie,iq,1,iz)[0];
+              if (minp < 0) minp = 0;
+
+              const bool islo = (xcsum < minp*csum);
+              const bool ishi = (xcsum > maxp*csum);
+              if (islo || ishi) {
+                const Real ratio = xcsum/csum;
+                if (islo) minp = ratio;
+                if (ishi) maxp = ratio;
+              }
+            }
+          }
         });
     }
     Kokkos::parallel_for(
@@ -511,8 +555,8 @@ public:
         m_geometry.num_elems() * m_data.qsize, m_tpref),
       *this);
     ExecSpace::impl_static_fence();
-    //fflush(stdout);
-    //exit(0);
+    fflush(stdout);
+    exit(0);
     m_kernel_will_run_limiters = false;
     profiling_pause();
   }
@@ -864,6 +908,7 @@ private:
         Kokkos::parallel_for(
           Kokkos::ThreadVectorRange(kv.team, NUM_LEV),
           [&] (const int& ilev) {
+            printf("qtens %d %d %d %d %d E3SM %g\n",kv.ie,kv.iq,igp,jgp,ilev,qtens(igp,jgp,ilev)[0]);
             qdp(igp, jgp, ilev) = spheremp(igp, jgp) * qtens(igp, jgp, ilev);
           });
       });
