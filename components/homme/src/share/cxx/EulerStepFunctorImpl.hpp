@@ -576,16 +576,17 @@ public:
           qtensxyz = x * dpm;
           qdp(ie,np1_qdp,iq,ix,iy,jz) = x * c; 
         });
+    } else {
+
+      Kokkos::parallel_for(
+        //to play with launch bounds
+        //Homme::get_default_team_policy<ExecSpace, AALTracerPhase, Kokkos::LaunchBounds<128,1> >(
+        Homme::get_default_team_policy<ExecSpace, AALTracerPhase >(
+          m_geometry.num_elems() * m_data.qsize, m_tpref),
+        *this);
+
     }
-    Kokkos::parallel_for(
-      //to play with launch bounds
-      //Homme::get_default_team_policy<ExecSpace, AALTracerPhase, Kokkos::LaunchBounds<128,1> >(
-      Homme::get_default_team_policy<ExecSpace, AALTracerPhase >(
-        m_geometry.num_elems() * m_data.qsize, m_tpref),
-      *this);
     ExecSpace::impl_static_fence();
-    fflush(stdout);
-    exit(0);
     m_kernel_will_run_limiters = false;
     profiling_pause();
   }
@@ -939,9 +940,7 @@ private:
         Kokkos::parallel_for(
           Kokkos::ThreadVectorRange(kv.team, NUM_LEV),
           [&] (const int& ilev) {
-            //printf("qtens %d %d %d %d %d E3SM %g\n",kv.ie,kv.iq,igp,jgp,ilev,qtens(igp,jgp,ilev)[0]);
-            //qdp(igp, jgp, ilev) = spheremp(igp, jgp) * qtens(igp, jgp, ilev);
-            printf("qdp %d %d %d %d %d E3SM %g\n",kv.ie,kv.iq,igp,jgp,ilev,qdp(igp,jgp,ilev)[0]);
+            qdp(igp, jgp, ilev) = spheremp(igp, jgp) * qtens(igp, jgp, ilev);
           });
       });
   }
