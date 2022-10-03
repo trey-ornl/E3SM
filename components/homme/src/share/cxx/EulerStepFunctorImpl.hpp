@@ -447,11 +447,10 @@ public:
         m_geometry.num_elems(), m_tpref),
       *this);
     ExecSpace::impl_static_fence();
+    GPTLstart("AALTracerPhase");
     m_kernel_will_run_limiters = true;
 
     if (m_data.limiter_option == 8) {
-
-      printf("TREY 4x4x4\n");
 
       static constexpr int NPNP = NP * NP;
       static_assert(warpSize % NPNP == 0, "Warp not divisible by NP*NP");
@@ -590,24 +589,7 @@ public:
 
     }
     ExecSpace::impl_static_fence();
-    Kokkos::fence();
-    auto qtens = Kokkos::create_mirror(m_tracers.qtens_biharmonic);
-    Kokkos::deep_copy(qtens, m_tracers.qtens_biharmonic);
-    auto qdp = Kokkos::create_mirror(m_tracers.qdp);
-    Kokkos::deep_copy(qdp, m_tracers.qdp);
-    for (int ie = 0; ie < m_geometry.num_elems(); ie++) {
-      for (int iq = 0; iq < m_data.qsize; iq++) {
-        for (int ix = 0; ix < NP; ix++) {
-          for (int iy = 0; iy < NP; iy++) {
-            for (int iz = 0; iz < NUM_LEV; iz++) {
-              printf("TREY %d %d %d %d %d qtens %g qdp %g\n",ie,iq,ix,iy,iz,qtens(ie,iq,ix,iy,iz)[0],qdp(ie,m_data.np1_qdp,iq,ix,iy,iz)[0]);
-            }
-          }
-        }
-      }
-    }
-    fflush(stdout);
-    exit(0);
+    GPTLstop("AALTracerPhase");
     m_kernel_will_run_limiters = false;
     profiling_pause();
   }
