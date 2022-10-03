@@ -558,7 +558,6 @@ public:
         qtens(igp,jgp,ilev) = (qdp(igp,jgp,ilev) +
                                alpha*((dudx + dvdy) * (1.0 / metdet(igp,jgp) * m_rrearth)) +
                                qtensijk0);
-        printf("qtens %d %d %d %d %d E3SM %g %g %g %g %g %g\n",kv.ie,kv.iq,igp,jgp,ilev,qdp(igp,jgp,ilev)[0],alpha,(dudx + dvdy)[0],metdet(igp,jgp),m_rrearth,qtens(igp,jgp,ilev)[0]);
       });
     });
     kv.team_barrier();

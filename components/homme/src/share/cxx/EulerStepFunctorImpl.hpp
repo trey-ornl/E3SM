@@ -451,6 +451,8 @@ public:
 
     if (m_data.limiter_option == 8) {
 
+      printf("TREY 4x4x4\n");
+
       static constexpr int NPNP = NP * NP;
       static_assert(warpSize % NPNP == 0, "Warp not divisible by NP*NP");
       static constexpr int TEAM_LEV = warpSize / NPNP;
@@ -576,6 +578,7 @@ public:
           qtensxyz = x * dpm;
           qdp(ie,np1_qdp,iq,ix,iy,jz) = x * c; 
         });
+
     } else {
 
       Kokkos::parallel_for(
@@ -587,6 +590,24 @@ public:
 
     }
     ExecSpace::impl_static_fence();
+    Kokkos::fence();
+    auto qtens = Kokkos::create_mirror(m_tracers.qtens_biharmonic);
+    Kokkos::deep_copy(qtens, m_tracers.qtens_biharmonic);
+    auto qdp = Kokkos::create_mirror(m_tracers.qdp);
+    Kokkos::deep_copy(qdp, m_tracers.qdp);
+    for (int ie = 0; ie < m_geometry.num_elems(); ie++) {
+      for (int iq = 0; iq < m_data.qsize; iq++) {
+        for (int ix = 0; ix < NP; ix++) {
+          for (int iy = 0; iy < NP; iy++) {
+            for (int iz = 0; iz < NUM_LEV; iz++) {
+              printf("TREY %d %d %d %d %d qtens %g qdp %g\n",ie,iq,ix,iy,iz,qtens(ie,iq,ix,iy,iz)[0],qdp(ie,m_data.np1_qdp,iq,ix,iy,iz)[0]);
+            }
+          }
+        }
+      }
+    }
+    fflush(stdout);
+    exit(0);
     m_kernel_will_run_limiters = false;
     profiling_pause();
   }
@@ -822,7 +843,6 @@ private:
 
   KOKKOS_INLINE_FUNCTION
   void run_tracer_phase (const KernelVariables& kv) const {
-#if 0
     compute_qtens(kv);
     kv.team_barrier();
     if (m_data.limiter_option == 8) {
@@ -832,7 +852,6 @@ private:
       limiter_clip_and_sum(kv);
       kv.team_barrier();
     }
-#endif
     apply_spheremp(kv);
   }
 
