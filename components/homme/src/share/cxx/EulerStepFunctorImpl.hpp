@@ -429,14 +429,12 @@ public:
   struct AALSetupPhase {};
   struct AALTracerPhase {};
 
-  static __device__ Real allsum(const int lev, const Real x)
+  static __device__ Real allsum(const Real x)
   {
     static constexpr int NPNP = NP*NP;
-    static constexpr int NLEV = warpSize/NPNP;
-
     Real sum = x;
-    for (int i = NLEV; i < warpSize; i += i) sum += __shfl_down(sum,i);
-    sum = __shfl(sum,lev);
+    for (int i = 1; i < NPNP; i += i) sum += __shfl_down(sum,i,NPNP);
+    sum = __shfl(sum,0,NPNP);
     return sum;
   }
 
@@ -493,10 +491,10 @@ public:
           const int iq = jq / LEV_BLOCKS;
 
           const int tr = team.team_rank();
-          const int ix = tr / NPL;
-          const int jy = tr - ix * NPL;
-          const int iy = jy / TEAM_LEV;
-          const int iz = jy - iy * TEAM_LEV; 
+          const int iz = tr / NPNP;
+          const int jx = tr - iz * NPNP;
+          const int ix = jx / NP;
+          const int iy = jx - ix * NP;
 
           const int jz = iz + jq * TEAM_LEV - iq * NUM_LEV;
 
@@ -523,12 +521,15 @@ public:
           const Real hv = add_hyperviscosity ? qtensxyz : 0;
           qtensxyz = qdp0 + alpha * duv * (1.0 / metdetxy) * rrearth + hv;
 
+#if 0
+          qdp(ie,np1_qdp,iq,ix,iy,jz) = qtensxyz * spheremp(ie,ix,iy);
+#else
           const Real dpm = dpmass(ie,ix,iy,jz)[0];
           const Real c = spheremp(ie,ix,iy) * dpm;
           Real x = qtensxyz / dpm;
 
-          const Real csum = allsum(iz, c);
-          const Real xcsum = allsum(iz, c * x);
+          const Real csum = allsum(c);
+          const Real xcsum = allsum(c * x);
           
           if (csum > 0) {
 
@@ -563,12 +564,12 @@ public:
                 delta = x - minp;
                 x = minp;
               }
-              const Real addmass = allsum(iz, delta * c);
+              const Real addmass = allsum(delta * c);
 
               if (fabs(addmass) <= tol) break;
 
               const bool test = (addmass > 0) ? (x < maxp) : (x > minp);
-              const Real weightsum = allsum(iz, test ? c : 0);
+              const Real weightsum = allsum(test ? c : 0);
               const Real adw = addmass/weightsum;
               x += (test ? adw : 0);
             }
@@ -576,6 +577,7 @@ public:
 
           qtensxyz = x * dpm;
           qdp(ie,np1_qdp,iq,ix,iy,jz) = x * c; 
+#endif
         });
 
     } else {
@@ -590,6 +592,7 @@ public:
     }
     ExecSpace::impl_static_fence();
     GPTLstop("AALTracerPhase");
+    Kokkos::abort("TREY");
     m_kernel_will_run_limiters = false;
     profiling_pause();
   }
