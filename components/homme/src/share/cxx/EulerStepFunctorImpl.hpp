@@ -482,21 +482,25 @@ public:
       const auto &spheremp = m_geometry.m_spheremp;
       const auto &qlim = m_tracers.qlim;
 
+      //printf("TREY vector 4\n");
       Kokkos::parallel_for(
-        TeamPolicy(ne * nql, TEAM_SIZE).set_scratch_size(0,Kokkos::PerTeam((2 * TEAM_SIZE + NPNP) * sizeof(Real))),
+        TeamPolicy(ne * nql, TEAM_LEV, NPNP).set_scratch_size(0,Kokkos::PerTeam((2 * TEAM_SIZE + NPNP) * sizeof(Real))),
         KOKKOS_LAMBDA(const Team &team) {
           const int lr = team.league_rank();
           const int ie = lr / nql;
           const int jq = lr - ie * nql;
           const int iq = jq / LEV_BLOCKS;
 
-          const int tr = team.team_rank();
-          const int iz = tr / NPNP;
-          const int jx = tr - iz * NPNP;
-          const int ix = jx / NP;
-          const int iy = jx - ix * NP;
-
+          const int iz = team.team_rank();
           const int jz = iz + jq * TEAM_LEV - iq * NUM_LEV;
+
+          int ix, iy;
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NPNP),
+            [&] (const int ixy) {
+              ix = ixy / NP;
+              iy = ixy % NP;
+            });
 
           ScratchNPNP dd(team.team_scratch(0));
           if (iz == 0) dd(ix,iy) = dvv(ix,iy);
@@ -521,15 +525,18 @@ public:
           const Real hv = add_hyperviscosity ? qtensxyz : 0;
           qtensxyz = qdp0 + alpha * duv * (1.0 / metdetxy) * rrearth + hv;
 
-#if 0
-          qdp(ie,np1_qdp,iq,ix,iy,jz) = qtensxyz * spheremp(ie,ix,iy);
-#else
           const Real dpm = dpmass(ie,ix,iy,jz)[0];
           const Real c = spheremp(ie,ix,iy) * dpm;
           Real x = qtensxyz / dpm;
 
-          const Real csum = allsum(c);
-          const Real xcsum = allsum(c * x);
+          Real csum = 0;
+          Kokkos::parallel_reduce(
+            Kokkos::ThreadVectorRange(team, NPNP),
+            [=] (int, Real &sum) { sum += c; }, csum);
+          Real xcsum = 0;
+          Kokkos::parallel_reduce(
+            Kokkos::ThreadVectorRange(team, NPNP),
+            [=] (int, Real &sum) { sum += c * x; }, xcsum);
           
           if (csum > 0) {
 
@@ -564,12 +571,18 @@ public:
                 delta = x - minp;
                 x = minp;
               }
-              const Real addmass = allsum(delta * c);
+              Real addmass = 0;
+              Kokkos::parallel_reduce(
+                Kokkos::ThreadVectorRange(team, NPNP),
+                [=] (int, Real &sum) { sum += delta * x; }, addmass);
 
               if (fabs(addmass) <= tol) break;
 
               const bool test = (addmass > 0) ? (x < maxp) : (x > minp);
-              const Real weightsum = allsum(test ? c : 0);
+              Real weightsum = 0;
+              Kokkos::parallel_reduce(
+                Kokkos::ThreadVectorRange(team, NPNP),
+                [=] (int, Real &sum) { sum += (test ? c : 0); }, weightsum);
               const Real adw = addmass/weightsum;
               x += (test ? adw : 0);
             }
@@ -577,7 +590,7 @@ public:
 
           qtensxyz = x * dpm;
           qdp(ie,np1_qdp,iq,ix,iy,jz) = x * c; 
-#endif
+          //printf("TREY %d %d %d %d %d qtens %g qdp %g\n",ie,iq,ix,iy,jz,qtensxyz,qdp(ie,np1_qdp,iq,ix,iy,jz)[0]);
         });
 
     } else {
@@ -592,7 +605,7 @@ public:
     }
     ExecSpace::impl_static_fence();
     GPTLstop("AALTracerPhase");
-    Kokkos::abort("TREY");
+    //Kokkos::abort("TREY");
     m_kernel_will_run_limiters = false;
     profiling_pause();
   }
@@ -945,6 +958,7 @@ private:
           Kokkos::ThreadVectorRange(kv.team, NUM_LEV),
           [&] (const int& ilev) {
             qdp(igp, jgp, ilev) = spheremp(igp, jgp) * qtens(igp, jgp, ilev);
+            //printf("TREY %d %d %d %d %d qtens %g qdp %g\n",kv.ie,kv.iq,igp,jgp,ilev,qtens(igp, jgp, ilev)[0],qdp(igp, jgp, ilev)[0]);
           });
       });
   }
