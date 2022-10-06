@@ -218,9 +218,15 @@ struct CaarFunctorImpl {
       using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
       using Team = TeamPolicy::member_type;
 
+      const int n0 = m_data.n0;
+      const Real eta = m_data.eta_ave_w;
+
+      auto &dp3d = m_state.m_dp3d;
       auto &t_v = m_buffers.temperature_virt;
       const auto &t = m_state.m_t;
-      const int n0 = m_data.n0;
+      const auto &v = m_state.m_v;
+      auto &vdp = m_buffers.vdp;
+      auto &vn0 = m_derived.m_vn0;
 
       Kokkos::parallel_for(
         TeamPolicy(m_num_elems, NP*NP, warpSize),
@@ -229,20 +235,24 @@ struct CaarFunctorImpl {
           const int ie = team.league_rank();
 
           const int tr = team.team_rank();
-          const int ix = tr / NP;
-          const int iy = tr % NP;
+          const int i = tr / NP;
+          const int j = tr % NP;
 
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
-            [&] (const int iz) {
-              t_v(ie,ix,iy,iz) = t(ie,n0,ix,iy,iz);
+            [&] (const int k) {
+              t_v(ie,i,j,k) = t(ie,n0,i,j,k);
+              vdp(ie,0,i,j,k) = v(ie,n0,0,i,j,k) * dp3d(ie,n0,i,j,k);
+              vn0(ie,0,i,j,k) += eta * vdp(ie,0,i,j,k);
+              vdp(ie,1,i,j,k) = v(ie,n0,1,i,j,k) * dp3d(ie,n0,i,j,k);
+              vn0(ie,1,i,j,k) += eta * vdp(ie,1,i,j,k);
             });
         });
     }
     Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
     ExecSpace::impl_static_fence();
     GPTLstop("caar compute");
-    Kokkos::abort("TREY 1");
+    Kokkos::abort("TREY 2");
 
     GPTLstart("caar_bexchV");
     m_bes[data.np1]->exchange(m_geometry.m_rspheremp);
@@ -562,7 +572,7 @@ struct CaarFunctorImpl {
   KOKKOS_INLINE_FUNCTION
   void compute_temperature_div_vdp(KernelVariables &kv) const {
     if (m_data.n0_qdp < 0) {
-      //compute_temperature_no_tracers_helper(kv);
+      compute_temperature_no_tracers_helper(kv);
     } else {
       compute_temperature_tracers_helper(kv);
     }
@@ -765,7 +775,7 @@ struct CaarFunctorImpl {
   void operator()(const TeamMember &team) const {
     KernelVariables kv(team);
 
-    compute_temperature_div_vdp(kv);
+    //compute_temperature_div_vdp(kv);
     kv.team.team_barrier();
 
     compute_scan_properties(kv);
