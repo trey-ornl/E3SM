@@ -462,7 +462,7 @@ public:
       using Team = TeamPolicy::member_type;
       using Scratch = ExecSpace::scratch_memory_space; 
       using ScratchNPNP = Kokkos::View<Real[NP][NP], Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-      using ScratchNPNPL = Kokkos::View<Real[NP][NP][TEAM_LEV], Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+      using ScratchNPNPL = Kokkos::View<Real[TEAM_LEV][NP][NP], Scratch, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
 
       const int ne = m_geometry.num_elems();
       const int nq = m_data.qsize;
@@ -511,15 +511,15 @@ public:
           const Real v0 = vstar(ie,0,ix,iy,jz)[0] * qdpm;
           const Real v1 = vstar(ie,1,ix,iy,jz)[0] * qdpm;
           ScratchNPNPL gv0(team.team_scratch(0)); 
-          gv0(ix,iy,iz) = d_inv(ie,0,0,ix,iy) * v0 + d_inv(ie,1,0,ix,iy) * v1;
+          gv0(iz,ix,iy) = d_inv(ie,0,0,ix,iy) * v0 + d_inv(ie,1,0,ix,iy) * v1;
           ScratchNPNPL gv1(team.team_scratch(0)); 
-          gv1(ix,iy,iz) = d_inv(ie,0,1,ix,iy) * v0 + d_inv(ie,1,1,ix,iy) * v1;
+          gv1(iz,ix,iy) = d_inv(ie,0,1,ix,iy) * v0 + d_inv(ie,1,1,ix,iy) * v1;
 
           team.team_barrier();
 
           Real duv = 0;
           for (int k = 0; k < NP; k++) {
-            duv += dd(iy,k) * gv0(ix,k,iz) + dd(ix,k) * gv1(k,iy,iz);
+            duv += dd(iy,k) * gv0(iz,ix,k) + dd(ix,k) * gv1(iz,k,iy);
           }
           Real &qtensxyz = qtens(ie,iq,ix,iy,jz)[0];
           const Real hv = add_hyperviscosity ? qtensxyz : 0;
