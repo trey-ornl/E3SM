@@ -213,9 +213,36 @@ struct CaarFunctorImpl {
 
     profiling_resume();
     GPTLstart("caar compute");
+    if (m_data.n0_qdp < 0) {
+
+      using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
+      using Team = TeamPolicy::member_type;
+
+      auto &t_v = m_buffers.temperature_virt;
+      const auto &t = m_state.m_t;
+      const int n0 = m_data.n0;
+
+      Kokkos::parallel_for(
+        TeamPolicy(m_num_elems, NP*NP, warpSize),
+        KOKKOS_LAMBDA(const Team &team) {
+
+          const int ie = team.league_rank();
+
+          const int tr = team.team_rank();
+          const int ix = tr / NP;
+          const int iy = tr % NP;
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&] (const int iz) {
+              t_v(ie,ix,iy,iz) = t(ie,n0,ix,iy,iz);
+            });
+        });
+    }
     Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
     ExecSpace::impl_static_fence();
     GPTLstop("caar compute");
+    Kokkos::abort("TREY 1");
 
     GPTLstart("caar_bexchV");
     m_bes[data.np1]->exchange(m_geometry.m_rspheremp);
@@ -535,7 +562,7 @@ struct CaarFunctorImpl {
   KOKKOS_INLINE_FUNCTION
   void compute_temperature_div_vdp(KernelVariables &kv) const {
     if (m_data.n0_qdp < 0) {
-      compute_temperature_no_tracers_helper(kv);
+      //compute_temperature_no_tracers_helper(kv);
     } else {
       compute_temperature_tracers_helper(kv);
     }
@@ -623,6 +650,8 @@ struct CaarFunctorImpl {
 
         m_state.m_dp3d(kv.ie, m_data.np1, igp, jgp, ilev) =
             m_geometry.m_spheremp(kv.ie, igp, jgp) * tmp;
+
+        printf("TREY %d %d %d %d %d dp3d %g v0 %g v1 %g\n", kv.ie, m_data.np1, igp, jgp, ilev, m_state.m_dp3d(kv.ie, m_data.np1, igp, jgp, ilev)[0], m_state.m_v(kv.ie, m_data.np1, 0, igp, jgp, ilev)[0], m_state.m_v(kv.ie, m_data.np1, 1, igp, jgp, ilev)[0]);
       });
     });
     kv.team_barrier();
