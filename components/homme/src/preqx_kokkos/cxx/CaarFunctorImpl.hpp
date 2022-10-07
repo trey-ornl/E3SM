@@ -215,13 +215,17 @@ struct CaarFunctorImpl {
     GPTLstart("caar compute");
     if (m_data.n0_qdp < 0) {
 
+      static_assert(VECTOR_SIZE == 1, "VECTOR_SIZE != 1");
+
       using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
       using Team = TeamPolicy::member_type;
 
       const int n0 = m_data.n0;
       const Real eta = m_data.eta_ave_w;
+      const Real aips0 = m_hvcoord.hybrid_ai0 * m_hvcoord.ps0;
 
       auto &dp3d = m_state.m_dp3d;
+      auto &p = m_buffers.pressure;
       auto &t_v = m_buffers.temperature_virt;
       const auto &t = m_state.m_t;
       const auto &v = m_state.m_v;
@@ -238,21 +242,46 @@ struct CaarFunctorImpl {
           const int i = tr / NP;
           const int j = tr % NP;
 
+          const Real *const tij = &t(ie,n0,i,j,0)[0];
+          Real *const KOKKOS_RESTRICT tvij = &t_v(ie,i,j,0)[0];
+
+          const Real *const dpij = &dp3d(ie,n0,i,j,0)[0]; 
+
+          const Real *const v00ij = &v(ie,n0,0,i,j,0)[0];
+          Real *const KOKKOS_RESTRICT vdp0ij = &vdp(ie,0,i,j,0)[0];
+          Real *const KOKKOS_RESTRICT vn00ij = &vn0(ie,0,i,j,0)[0];
+
+          const Real *const v01ij = &v(ie,n0,1,i,j,0)[0];
+          Real *const KOKKOS_RESTRICT vdp1ij = &vdp(ie,1,i,j,0)[0];
+          Real *const KOKKOS_RESTRICT vn01ij = &vn0(ie,1,i,j,0)[0];
+
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
-            [&] (const int k) {
-              t_v(ie,i,j,k) = t(ie,n0,i,j,k);
-              vdp(ie,0,i,j,k) = v(ie,n0,0,i,j,k) * dp3d(ie,n0,i,j,k);
-              vn0(ie,0,i,j,k) += eta * vdp(ie,0,i,j,k);
-              vdp(ie,1,i,j,k) = v(ie,n0,1,i,j,k) * dp3d(ie,n0,i,j,k);
-              vn0(ie,1,i,j,k) += eta * vdp(ie,1,i,j,k);
+            [&](const int k) {
+              tvij[k] = tij[k];
+              vdp0ij[k] = v00ij[k] * dpij[k];
+              vn00ij[k] += eta * vdp0ij[k];
+              vdp1ij[k] = v01ij[k] * dpij[k];
+              vn01ij[k] += eta * vdp1ij[k];
+            });
+
+          Real *const KOKKOS_RESTRICT pij = &p(ie,i,j,0)[0];
+          const Real p0 = aips0 + 0.5 * dpij[0];
+          pij[0] = p0;
+
+          Kokkos::parallel_scan(
+            Kokkos::ThreadVectorRange(team, NUM_LEV-1),
+            [&](const int k, Real &sum, const bool last) {
+              sum += (k == 0 ? p0 : 0);
+              sum += 0.5 * (dpij[k] + dpij[k+1]);
+              if (last) pij[k+1] = sum;
             });
         });
     }
     Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
     ExecSpace::impl_static_fence();
     GPTLstop("caar compute");
-    Kokkos::abort("TREY 2");
+    Kokkos::abort("TREY 5");
 
     GPTLstart("caar_bexchV");
     m_bes[data.np1]->exchange(m_geometry.m_rspheremp);
@@ -494,7 +523,7 @@ struct CaarFunctorImpl {
   // Modifies pressure, PHI
   KOKKOS_INLINE_FUNCTION
   void compute_scan_properties(KernelVariables &kv) const {
-    compute_pressure(kv);
+    //compute_pressure(kv);
     preq_hydrostatic(kv);
     preq_omega_ps(kv);
   } // TRIVIAL
