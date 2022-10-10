@@ -237,6 +237,9 @@ struct CaarFunctorImpl {
       const auto &dinv = m_sphere_ops.m_dinv;
       const auto &metdet = m_sphere_ops.m_metdet;
       const auto &sodvv = m_sphere_ops.dvv;
+      auto &temperature_grad = m_buffers.temperature_grad;
+      const auto &phis = m_geometry.m_phis;
+      auto &ephis = m_buffers.ephi;
 
       static constexpr int NPNP = NP * NP;
 
@@ -320,12 +323,38 @@ struct CaarFunctorImpl {
               sum += 0.5 * (dpij[k] + dpij[k+1]);
               if (last) pij[k+1] = sum;
             });
+
+          Real *const KOKKOS_RESTRICT rgas_tv_dp_over_p = &(temperature_grad(ie,0,i,j,0)[0]);
+          Real *const KOKKOS_RESTRICT integration = &(temperature_grad(ie,1,i,j,0)[0]);
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int k) {
+              rgas_tv_dp_over_p[k] = PhysicalConstants::Rgas * tvij[k] * (dpij[k] * 0.5 / pij[k]);
+              integration[k] = 0;
+            });
+
+          Kokkos::parallel_scan(
+            Kokkos::ThreadVectorRange(team, NUM_LEV-1),
+            [&](const int k, Real &accumulator, const bool last) {
+              const int level = NUM_LEV-1-k;
+              accumulator += rgas_tv_dp_over_p[level];
+              if (last) integration[level-1] = accumulator;
+            });
+
+          const Real phisij = phis(ie,i,j);
+          Real *const KOKKOS_RESTRICT ephisij = &(ephis(ie,i,j,0)[0]);
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int k) {
+              ephisij[k] = phisij + 2.0 * integration[k] + rgas_tv_dp_over_p[k];
+            });
         });
     }
     Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
     ExecSpace::impl_static_fence();
     GPTLstop("caar compute");
-    Kokkos::abort("TREY 8");
+    Kokkos::abort("TREY 10");
 
     GPTLstart("caar_bexchV");
     m_bes[data.np1]->exchange(m_geometry.m_rspheremp);
@@ -568,7 +597,7 @@ struct CaarFunctorImpl {
   KOKKOS_INLINE_FUNCTION
   void compute_scan_properties(KernelVariables &kv) const {
     //compute_pressure(kv);
-    preq_hydrostatic(kv);
+    //preq_hydrostatic(kv);
     preq_omega_ps(kv);
   } // TRIVIAL
 
