@@ -228,6 +228,7 @@ struct CaarFunctorImpl {
 
       auto &dp3d = m_state.m_dp3d;
       auto &p = m_buffers.pressure;
+      auto &pressure_grad = m_buffers.pressure_grad;
       auto &t_v = m_buffers.temperature_virt;
       const auto &t = m_state.m_t;
       const auto &v = m_state.m_v;
@@ -240,6 +241,7 @@ struct CaarFunctorImpl {
       auto &temperature_grad = m_buffers.temperature_grad;
       const auto &phis = m_geometry.m_phis;
       auto &ephis = m_buffers.ephi;
+      auto &omega_p = m_buffers.omega_p;
 
       static constexpr int NPNP = NP * NP;
 
@@ -349,12 +351,45 @@ struct CaarFunctorImpl {
             [&](const int k) {
               ephisij[k] = phisij + 2.0 * integration[k] + rgas_tv_dp_over_p[k];
             });
+
+          Real *const KOKKOS_RESTRICT pg0ij = &(pressure_grad(ie,0,i,j,0)[0]);
+          Real *const KOKKOS_RESTRICT pg1ij = &(pressure_grad(ie,1,i,j,0)[0]);
+          const Real *const pie = &(p(ie,0,0,0)[0]);
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int k) {
+              Real v0 = 0;
+              Real v1 = 0;
+              for (int h = 0; h < NP; h++) {
+                v0 += dvvj[h] * pie[i * NPL + h * NUM_LEV + k];
+                v1 += dvvi[h] * pie[h * NPL + j * NUM_LEV + k];
+              }
+              v0 *= rrearth;
+              v1 *= rrearth;
+              pg0ij[k] = dinv00ij * v0 + dinv01ij * v1;
+              pg1ij[k] = dinv10ij * v0 + dinv11ij * v1;
+            });
+
+          Real *const KOKKOS_RESTRICT omega_pij = &(omega_p(ie,i,j,0)[0]);
+          Kokkos::parallel_scan(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int k, Real &accumulator, const bool last) {
+              if (last) omega_pij[k] = accumulator;
+              accumulator += div_vdpij[k];
+            });
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int k) {
+              const Real vgrad_p = v00ij[k] * pg0ij[k] + v01ij[k] * pg1ij[k];
+              omega_pij[k] = (vgrad_p - (omega_pij[k] + 0.5 * div_vdpij[k])) / pij[k];
+            });
         });
     }
     Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
     ExecSpace::impl_static_fence();
     GPTLstop("caar compute");
-    Kokkos::abort("TREY 10");
+    Kokkos::abort("TREY 16");
 
     GPTLstart("caar_bexchV");
     m_bes[data.np1]->exchange(m_geometry.m_rspheremp);
@@ -596,8 +631,8 @@ struct CaarFunctorImpl {
   // Modifies pressure, PHI
   KOKKOS_INLINE_FUNCTION
   void compute_scan_properties(KernelVariables &kv) const {
-    //compute_pressure(kv);
-    //preq_hydrostatic(kv);
+    compute_pressure(kv);
+    preq_hydrostatic(kv);
     preq_omega_ps(kv);
   } // TRIVIAL
 
@@ -891,7 +926,7 @@ struct CaarFunctorImpl {
     //compute_temperature_div_vdp(kv);
     kv.team.team_barrier();
 
-    compute_scan_properties(kv);
+    //compute_scan_properties(kv);
     kv.team.team_barrier();
 
     compute_phase_3(kv);
@@ -1111,7 +1146,6 @@ private:
 
         accumulator += div_vdp(level);
       });
-
       Kokkos::parallel_for(Kokkos::ThreadVectorRange(kv.team, NUM_LEV),
                            [&](const int ilev) {
         const Scalar vgrad_p =
