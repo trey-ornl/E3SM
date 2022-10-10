@@ -242,8 +242,11 @@ struct CaarFunctorImpl {
       const auto &phis = m_geometry.m_phis;
       auto &ephis = m_buffers.ephi;
       auto &omega_p = m_buffers.omega_p;
+      auto &derived_omega_p = m_derived.m_omega_p;
 
       static constexpr int NPNP = NP * NP;
+
+      if (m_rsplit == 0) Errors::runtime_abort("rsplit == 0 not implemented");
 
       Kokkos::parallel_for(
         TeamPolicy(m_num_elems, NP*NP, warpSize).
@@ -378,18 +381,20 @@ struct CaarFunctorImpl {
               accumulator += div_vdpij[k];
             });
 
+          Real *const KOKKOS_RESTRICT derived_omega_pij = &(derived_omega_p(ie,i,j,0)[0]);
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
               const Real vgrad_p = v00ij[k] * pg0ij[k] + v01ij[k] * pg1ij[k];
               omega_pij[k] = (vgrad_p - (omega_pij[k] + 0.5 * div_vdpij[k])) / pij[k];
+              derived_omega_pij[k] = eta * omega_pij[k];
             });
         });
     }
     Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
     ExecSpace::impl_static_fence();
     GPTLstop("caar compute");
-    Kokkos::abort("TREY 16");
+    Kokkos::abort("TREY 19");
 
     GPTLstart("caar_bexchV");
     m_bes[data.np1]->exchange(m_geometry.m_rspheremp);
@@ -447,7 +452,7 @@ struct CaarFunctorImpl {
       preq_vertadv(kv);
       accumulate_eta_dot_dpdn(kv);
     }
-    compute_omega_p(kv);
+    //compute_omega_p(kv);
     compute_temperature_np1(kv);
     compute_velocity_np1(kv);
     compute_dp3d_np1(kv);
