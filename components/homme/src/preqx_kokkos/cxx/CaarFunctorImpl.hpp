@@ -222,27 +222,36 @@ struct CaarFunctorImpl {
       using Team = TeamPolicy::member_type;
 
       const int n0 = m_data.n0;
-      const Real eta = m_data.eta_ave_w;
+      const int nm1 = m_data.nm1;
+      const int np1 = m_data.np1;
+
       const Real aips0 = m_hvcoord.hybrid_ai0 * m_hvcoord.ps0;
+      const Real dt = m_data.dt;
+      const Real eta = m_data.eta_ave_w;
       const Real rrearth = m_sphere_ops.m_rrearth;
 
-      auto &dp3d = m_state.m_dp3d;
-      auto &p = m_buffers.pressure;
-      auto &pressure_grad = m_buffers.pressure_grad;
-      auto &t_v = m_buffers.temperature_virt;
-      const auto &t = m_state.m_t;
-      const auto &v = m_state.m_v;
-      auto &vdp = m_buffers.vdp;
       auto &div_vdp = m_buffers.div_vdp;
-      auto &vn0 = m_derived.m_vn0;
-      const auto &dinv = m_sphere_ops.m_dinv;
-      const auto &metdet = m_sphere_ops.m_metdet;
-      const auto &sodvv = m_sphere_ops.dvv;
-      auto &temperature_grad = m_buffers.temperature_grad;
-      const auto &phis = m_geometry.m_phis;
       auto &ephis = m_buffers.ephi;
       auto &omega_p = m_buffers.omega_p;
+      auto &p = m_buffers.pressure;
+      auto &pressure_grad = m_buffers.pressure_grad;
+      auto &temperature_grad = m_buffers.temperature_grad;
+      auto &t_v = m_buffers.temperature_virt;
+      auto &vdp = m_buffers.vdp;
+
       auto &derived_omega_p = m_derived.m_omega_p;
+      auto &vn0 = m_derived.m_vn0;
+
+      const auto &phis = m_geometry.m_phis;
+      const auto &spheremp = m_geometry.m_spheremp;
+
+      const auto &sodvv = m_sphere_ops.dvv;
+      const auto &dinv = m_sphere_ops.m_dinv;
+      const auto &metdet = m_sphere_ops.m_metdet;
+
+      auto &dp3d = m_state.m_dp3d;
+      const auto &t = m_state.m_t;
+      const auto &v = m_state.m_v;
 
       static constexpr int NPNP = NP * NP;
 
@@ -259,7 +268,7 @@ struct CaarFunctorImpl {
           const int i = tr / NP;
           const int j = tr % NP;
 
-          const Real *const tij = &t(ie,n0,i,j,0)[0];
+          const Real *const t0ij = &t(ie,n0,i,j,0)[0];
           Real *const KOKKOS_RESTRICT tvij = &t_v(ie,i,j,0)[0];
 
           const Real *const dpij = &dp3d(ie,n0,i,j,0)[0]; 
@@ -290,7 +299,7 @@ struct CaarFunctorImpl {
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
               if (k == 0) dvv[i * NP + j] = sodvv(i,j);
-              tvij[k] = tij[k];
+              tvij[k] = t0ij[k];
               vdp0ij[k] = v00ij[k] * dpij[k];
               vn00ij[k] += eta * vdp0ij[k];
               vdp1ij[k] = v01ij[k] * dpij[k];
@@ -381,20 +390,45 @@ struct CaarFunctorImpl {
               accumulator += div_vdpij[k];
             });
 
+          team.team_barrier();
+
+          Real *const KOKKOS_RESTRICT tg0ij = rgas_tv_dp_over_p;
+          Real *const KOKKOS_RESTRICT tg1ij = integration;
+
+          const Real *const tnm1ij = &(t(ie,nm1,i,j,0)[0]);
           Real *const KOKKOS_RESTRICT derived_omega_pij = &(derived_omega_p(ie,i,j,0)[0]);
+          const Real *const t0 = &t(ie,n0,0,0,0)[0];
+          const Real spherempij = spheremp(ie,i,j);
+          Real *const KOKKOS_RESTRICT tnp1ij = &(t(ie,np1,i,j,0)[0]);
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
               const Real vgrad_p = v00ij[k] * pg0ij[k] + v01ij[k] * pg1ij[k];
               omega_pij[k] = (vgrad_p - (omega_pij[k] + 0.5 * div_vdpij[k])) / pij[k];
               derived_omega_pij[k] = eta * omega_pij[k];
+
+              Real v0 = 0;
+              Real v1 = 0;
+              for (int h = 0; h < NP; h++) {
+                v0 += dvvj[h] * t0[i * NPL + h * NUM_LEV + k];
+                v1 += dvvi[h] * t0[h * NPL + j * NUM_LEV + k];
+              }
+              v0 *= rrearth;
+              v1 *= rrearth;
+              tg0ij[k] = dinv00ij * v0 + dinv01ij * v1;
+              tg1ij[k] = dinv10ij * v0 + dinv11ij * v1;
+
+              const Real vgrad_t = v00ij[k] * tg0ij[k] + v01ij[k] * tg1ij[k];
+              const Real ttens = -vgrad_t + PhysicalConstants::kappa * tvij[k] * omega_pij[k];
+              tnp1ij[k] = (ttens * dt + tnm1ij[k]) * spherempij;
             });
+
         });
     }
     Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
     ExecSpace::impl_static_fence();
     GPTLstop("caar compute");
-    Kokkos::abort("TREY 19");
+    Kokkos::abort("TREY 21");
 
     GPTLstart("caar_bexchV");
     m_bes[data.np1]->exchange(m_geometry.m_rspheremp);
@@ -453,7 +487,7 @@ struct CaarFunctorImpl {
       accumulate_eta_dot_dpdn(kv);
     }
     //compute_omega_p(kv);
-    compute_temperature_np1(kv);
+    //compute_temperature_np1(kv);
     compute_velocity_np1(kv);
     compute_dp3d_np1(kv);
   } // TRIVIAL
