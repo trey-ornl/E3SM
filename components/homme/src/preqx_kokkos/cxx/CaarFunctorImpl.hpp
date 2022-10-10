@@ -309,7 +309,6 @@ struct CaarFunctorImpl {
               div_vdpij[k] = dudv * rmetdetij;
             });
 
-#if 0
           Real *const KOKKOS_RESTRICT pij = &p(ie,i,j,0)[0];
           const Real p0 = aips0 + 0.5 * dpij[0];
           pij[0] = p0;
@@ -321,7 +320,6 @@ struct CaarFunctorImpl {
               sum += 0.5 * (dpij[k] + dpij[k+1]);
               if (last) pij[k+1] = sum;
             });
-#endif
         });
     }
     Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
@@ -569,7 +567,7 @@ struct CaarFunctorImpl {
   // Modifies pressure, PHI
   KOKKOS_INLINE_FUNCTION
   void compute_scan_properties(KernelVariables &kv) const {
-    compute_pressure(kv); // TREY
+    //compute_pressure(kv);
     preq_hydrostatic(kv);
     preq_omega_ps(kv);
   } // TRIVIAL
