@@ -21,7 +21,7 @@
 #define VECTOR_SIMD_LOOP _Pragma("GCC ivdep")
 
 #else // __GNUG__ ...
-#pragma message( \
+//#pragma message( \
     "G++ <4.9 Does not support vectorization pragmas")
 #define VECTOR_IVDEP_LOOP
 #define ALWAYS_VECTORIZE_LOOP

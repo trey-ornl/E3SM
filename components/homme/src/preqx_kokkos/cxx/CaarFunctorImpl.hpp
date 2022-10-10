@@ -213,6 +213,7 @@ struct CaarFunctorImpl {
 
     profiling_resume();
     GPTLstart("caar compute");
+
     if (m_data.n0_qdp < 0) {
 
       static_assert(VECTOR_SIZE == 1, "VECTOR_SIZE != 1");
@@ -223,6 +224,7 @@ struct CaarFunctorImpl {
       const int n0 = m_data.n0;
       const Real eta = m_data.eta_ave_w;
       const Real aips0 = m_hvcoord.hybrid_ai0 * m_hvcoord.ps0;
+      const Real rrearth = m_sphere_ops.m_rrearth;
 
       auto &dp3d = m_state.m_dp3d;
       auto &p = m_buffers.pressure;
@@ -230,10 +232,17 @@ struct CaarFunctorImpl {
       const auto &t = m_state.m_t;
       const auto &v = m_state.m_v;
       auto &vdp = m_buffers.vdp;
+      auto &div_vdp = m_buffers.div_vdp;
       auto &vn0 = m_derived.m_vn0;
+      const auto &dinv = m_sphere_ops.m_dinv;
+      const auto &metdet = m_sphere_ops.m_metdet;
+      const auto &sodvv = m_sphere_ops.dvv;
+
+      static constexpr int NPNP = NP * NP;
 
       Kokkos::parallel_for(
-        TeamPolicy(m_num_elems, NP*NP, warpSize),
+        TeamPolicy(m_num_elems, NP*NP, warpSize).
+        set_scratch_size(0,Kokkos::PerTeam((2 * NPNP * NUM_LEV + NPNP) * sizeof(Real))),
         KOKKOS_LAMBDA(const Team &team) {
 
           const int ie = team.league_rank();
@@ -250,21 +259,57 @@ struct CaarFunctorImpl {
           const Real *const v00ij = &v(ie,n0,0,i,j,0)[0];
           Real *const KOKKOS_RESTRICT vdp0ij = &vdp(ie,0,i,j,0)[0];
           Real *const KOKKOS_RESTRICT vn00ij = &vn0(ie,0,i,j,0)[0];
-
           const Real *const v01ij = &v(ie,n0,1,i,j,0)[0];
           Real *const KOKKOS_RESTRICT vdp1ij = &vdp(ie,1,i,j,0)[0];
           Real *const KOKKOS_RESTRICT vn01ij = &vn0(ie,1,i,j,0)[0];
 
+          static constexpr int PER_POINT = NPNP * NUM_LEV * sizeof(Real);
+          Real *const gv0 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
+          static constexpr int NPL = NP * NUM_LEV;
+          Real *const gv0ij = gv0 + i * NPL + j * NUM_LEV;
+          Real *const gv1 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
+          Real *const gv1ij = gv1 + i * NPL + j * NUM_LEV;
+
+          Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(NPNP * sizeof(Real)));
+
+          const Real metdetij = metdet(ie,i,j);
+          const Real dinv00ij = dinv(ie,0,0,i,j);
+          const Real dinv10ij = dinv(ie,1,0,i,j);
+          const Real dinv01ij = dinv(ie,0,1,i,j);
+          const Real dinv11ij = dinv(ie,1,1,i,j);
+
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
+              if (k == 0) dvv[i * NP + j] = sodvv(i,j);
               tvij[k] = tij[k];
               vdp0ij[k] = v00ij[k] * dpij[k];
               vn00ij[k] += eta * vdp0ij[k];
               vdp1ij[k] = v01ij[k] * dpij[k];
               vn01ij[k] += eta * vdp1ij[k];
+              gv0ij[k] = (dinv00ij * vdp0ij[k] + dinv10ij * vdp1ij[k]) * metdetij;
+              gv1ij[k] = (dinv01ij * vdp0ij[k] + dinv11ij * vdp1ij[k]) * metdetij;
             });
 
+          team.team_barrier();
+
+          const Real *const dvvi = dvv + i * NP;
+          const Real *const dvvj = dvv + j * NP;
+
+          const Real rmetdetij = 1.0 / metdetij * rrearth;
+          Real *const KOKKOS_RESTRICT div_vdpij = &div_vdp(ie,i,j,0)[0];
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int k) {
+              Real dudv = 0;
+              for (int h = 0; h < NP; h++) {
+                dudv += dvvj[h] * gv0[i * NPL + h * NUM_LEV + k] + dvvi[h] * gv1[h * NPL + j * NUM_LEV + k];
+              }
+              div_vdpij[k] = dudv * rmetdetij;
+            });
+
+#if 0
           Real *const KOKKOS_RESTRICT pij = &p(ie,i,j,0)[0];
           const Real p0 = aips0 + 0.5 * dpij[0];
           pij[0] = p0;
@@ -276,12 +321,13 @@ struct CaarFunctorImpl {
               sum += 0.5 * (dpij[k] + dpij[k+1]);
               if (last) pij[k+1] = sum;
             });
+#endif
         });
     }
     Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
     ExecSpace::impl_static_fence();
     GPTLstop("caar compute");
-    Kokkos::abort("TREY 5");
+    Kokkos::abort("TREY 8");
 
     GPTLstart("caar_bexchV");
     m_bes[data.np1]->exchange(m_geometry.m_rspheremp);
@@ -523,7 +569,7 @@ struct CaarFunctorImpl {
   // Modifies pressure, PHI
   KOKKOS_INLINE_FUNCTION
   void compute_scan_properties(KernelVariables &kv) const {
-    //compute_pressure(kv);
+    compute_pressure(kv); // TREY
     preq_hydrostatic(kv);
     preq_omega_ps(kv);
   } // TRIVIAL
@@ -589,10 +635,10 @@ struct CaarFunctorImpl {
       });
     });
     kv.team_barrier();
-
     m_sphere_ops.divergence_sphere(kv,
         Homme::subview(m_buffers.vdp, kv.team_idx),
         Homme::subview(m_buffers.div_vdp, kv.team_idx));
+
   } // TESTED 8
 
   // Depends on T_current, DERIVE_UN0, DERIVED_VN0, METDET,
@@ -690,7 +736,18 @@ struct CaarFunctorImpl {
         m_state.m_dp3d(kv.ie, m_data.np1, igp, jgp, ilev) =
             m_geometry.m_spheremp(kv.ie, igp, jgp) * tmp;
 
-        printf("TREY %d %d %d %d %d dp3d %g v0 %g v1 %g\n", kv.ie, m_data.np1, igp, jgp, ilev, m_state.m_dp3d(kv.ie, m_data.np1, igp, jgp, ilev)[0], m_state.m_v(kv.ie, m_data.np1, 0, igp, jgp, ilev)[0], m_state.m_v(kv.ie, m_data.np1, 1, igp, jgp, ilev)[0]);
+        printf("TREY %d %d %d %d %d dp3d %g v0 %g v1 %g div_vdp %g p %g vdp %g %g vn0 %g %g\n",
+               kv.ie, m_data.np1, igp, jgp, ilev,
+               m_state.m_dp3d(kv.ie, m_data.np1, igp, jgp, ilev)[0],
+               m_state.m_v(kv.ie, m_data.np1, 0, igp, jgp, ilev)[0],
+               m_state.m_v(kv.ie, m_data.np1, 1, igp, jgp, ilev)[0],
+               m_buffers.div_vdp(kv.ie, igp, jgp, ilev)[0],
+               m_buffers.pressure(kv.ie, igp, jgp, ilev)[0],
+               m_buffers.vdp(kv.ie, 0, igp, jgp, ilev)[0],
+               m_buffers.vdp(kv.ie, 1, igp, jgp, ilev)[0],
+               m_derived.m_vn0(kv.ie, 0, igp, jgp, ilev)[0],
+               m_derived.m_vn0(kv.ie, 1, igp, jgp, ilev)[0]
+              );
       });
     });
     kv.team_barrier();
