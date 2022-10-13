@@ -231,6 +231,7 @@ struct CaarFunctorImpl {
       const Real rrearth = m_sphere_ops.m_rrearth;
 
       auto &div_vdp = m_buffers.div_vdp;
+      auto &energy_grad = m_buffers.energy_grad;
       auto &ephis = m_buffers.ephi;
       auto &omega_p = m_buffers.omega_p;
       auto &p = m_buffers.pressure;
@@ -423,12 +424,42 @@ struct CaarFunctorImpl {
               tnp1ij[k] = (ttens * dt + tnm1ij[k]) * spherempij;
             });
 
+          Real *const KOKKOS_RESTRICT eg0ij = &(energy_grad(ie,0,i,j,0)[0]);
+          Real *const KOKKOS_RESTRICT eg1ij = &(energy_grad(ie,1,i,j,0)[0]);
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int k) {
+              const Real rtdp = PhysicalConstants::Rgas * tvij[k] / pij[k];
+              eg0ij[k] = rtdp * pg0ij[k];
+              eg1ij[k] = rtdp * pg1ij[k];
+              ephisij[k] += 0.5 * (v00ij[k] * v00ij[k] + v01ij[k] * v01ij[k]);
+            });
+
+          team.team_barrier();
+
+          const Real *const ephisie = &(ephis(ie,0,0,0)[0]);
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int k) {
+              Real dsdx = 0;
+              Real dsdy = 0;
+              for (int h = 0; h < NP; h++) {
+                dsdx += dvvj[h] * ephisie[i * NPL + h * NUM_LEV + k];
+                dsdy += dvvi[h] * ephisie[h * NPL + j * NUM_LEV + k];
+              }
+              dsdx *= rrearth;
+              dsdy *= rrearth;
+              eg0ij[k] += dinv00ij * dsdx + dinv01ij * dsdy;
+              eg1ij[k] += dinv10ij * dsdx + dinv11ij * dsdy;
+            });
+
+        // TREY
         });
     }
     Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
     ExecSpace::impl_static_fence();
     GPTLstop("caar compute");
-    Kokkos::abort("TREY 21");
+    Kokkos::abort("TREY 24");
 
     GPTLstart("caar_bexchV");
     m_bes[data.np1]->exchange(m_geometry.m_rspheremp);
@@ -527,7 +558,7 @@ struct CaarFunctorImpl {
   // D, DINV, U, V, FCOR, SPHEREMP, T_v
   KOKKOS_INLINE_FUNCTION
   void compute_velocity_np1(KernelVariables &kv) const {
-    compute_energy_grad(kv);
+    //compute_energy_grad(kv);
 
     m_sphere_ops.vorticity_sphere(kv,
         Homme::subview(m_state.m_v, kv.ie, m_data.n0),
@@ -571,6 +602,14 @@ struct CaarFunctorImpl {
         m_state.m_v(kv.ie, m_data.np1, 1, igp, jgp, ilev) =
             m_geometry.m_spheremp(kv.ie, igp, jgp) *
             m_buffers.energy_grad(kv.team_idx, 1, igp, jgp, ilev);
+
+        printf("TREY %d %d %d %d v %g %g eg %g %g vort %g\n",
+               kv.ie, igp, jgp, ilev,
+               m_state.m_v(kv.ie, m_data.np1, 0, igp, jgp, ilev)[0],
+               m_state.m_v(kv.ie, m_data.np1, 1, igp, jgp, ilev)[0],
+               m_buffers.energy_grad(kv.team_idx, 0, igp, jgp, ilev)[0],
+               m_buffers.energy_grad(kv.team_idx, 1, igp, jgp, ilev)[0],
+               m_buffers.vorticity(kv.team_idx, igp, jgp, ilev)[0]);
       });
     });
     kv.team_barrier();
@@ -837,6 +876,7 @@ struct CaarFunctorImpl {
         m_state.m_dp3d(kv.ie, m_data.np1, igp, jgp, ilev) =
             m_geometry.m_spheremp(kv.ie, igp, jgp) * tmp;
 
+        return;
         printf("TREY %d %d %d %d %d dp3d %g v0 %g v1 %g div_vdp %g p %g vdp %g %g vn0 %g %g\n",
                kv.ie, m_data.np1, igp, jgp, ilev,
                m_state.m_dp3d(kv.ie, m_data.np1, igp, jgp, ilev)[0],
