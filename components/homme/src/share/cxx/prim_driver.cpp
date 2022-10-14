@@ -53,7 +53,7 @@ void initialize_dp3d_from_ps_c () {
                                  + hybrid_bi_delta[ilev]*ps_v(ie,tln0,igp,jgp);
     });
   }
-  ExecSpace::impl_static_fence();
+  ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
   GPTLstop("tl-sc dp3d-from-ps");
 }
 

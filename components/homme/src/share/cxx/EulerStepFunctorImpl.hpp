@@ -325,7 +325,7 @@ public:
 
     }
 
-    ExecSpace::impl_static_fence();
+    ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
     profiling_pause();
   }
 
@@ -342,7 +342,7 @@ public:
                            m_geometry.num_elems() * m_data.qsize, m_tpref),
                          *this);
     }
-    ExecSpace::impl_static_fence();
+    ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
     profiling_pause();
   }
 
@@ -444,7 +444,7 @@ public:
       Homme::get_default_team_policy<ExecSpace, AALSetupPhase>(
         m_geometry.num_elems(), m_tpref),
       *this);
-    ExecSpace::impl_static_fence();
+    ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
     GPTLstart("AALTracerPhase");
     m_kernel_will_run_limiters = true;
 
@@ -603,7 +603,7 @@ public:
         *this);
 
     }
-    ExecSpace::impl_static_fence();
+    ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
     GPTLstop("AALTracerPhase");
     //Kokkos::abort("TREY");
     m_kernel_will_run_limiters = false;
@@ -633,7 +633,7 @@ public:
             m_geometry.num_elems(), m_tpref),
         *this);
 
-    ExecSpace::impl_static_fence();
+    ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
     profiling_pause();
   }
 
@@ -751,7 +751,7 @@ public:
               });
           }
       });
-    ExecSpace::impl_static_fence();
+    ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
   }
 
   void neighbor_minmax_start() {

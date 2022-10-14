@@ -273,6 +273,15 @@ struct CaarFunctorImpl {
           const int i = tr / NP;
           const int j = tr % NP;
 
+          static constexpr int PER_POINT = NPNP * NUM_LEV * sizeof(Real);
+          Real *const gv0 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
+          static constexpr int NPL = NP * NUM_LEV;
+          Real *const gv0ij = gv0 + i * NPL + j * NUM_LEV;
+          Real *const gv1 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
+          Real *const gv1ij = gv1 + i * NPL + j * NUM_LEV;
+
+          Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(NPNP * sizeof(Real)));
+
           const Real *const t0ij = &t(ie,n0,i,j,0)[0];
           Real *const KOKKOS_RESTRICT tvij = &t_v(ie,i,j,0)[0];
 
@@ -284,15 +293,6 @@ struct CaarFunctorImpl {
           const Real *const v01ij = &v(ie,n0,1,i,j,0)[0];
           Real *const KOKKOS_RESTRICT vdp1ij = &vdp(ie,1,i,j,0)[0];
           Real *const KOKKOS_RESTRICT vn01ij = &vn0(ie,1,i,j,0)[0];
-
-          static constexpr int PER_POINT = NPNP * NUM_LEV * sizeof(Real);
-          Real *const gv0 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
-          static constexpr int NPL = NP * NUM_LEV;
-          Real *const gv0ij = gv0 + i * NPL + j * NUM_LEV;
-          Real *const gv1 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
-          Real *const gv1ij = gv1 + i * NPL + j * NUM_LEV;
-
-          Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(NPNP * sizeof(Real)));
 
           const Real metdetij = metdet(ie,i,j);
           const Real dinv00ij = dinv(ie,0,0,i,j);
@@ -515,10 +515,10 @@ struct CaarFunctorImpl {
       Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
 
     }
-    ExecSpace::impl_static_fence();
+    ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
     GPTLstop("caar compute");
 
-    if (false) {
+    if (false) { // TREY
 
       using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
       using Team = TeamPolicy::member_type;
@@ -559,8 +559,8 @@ struct CaarFunctorImpl {
             });
         });
 
-      ExecSpace::impl_static_fence();
-      printf("TREY 1\n");
+      ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
+      printf("TREY 3\n");
       Kokkos::abort("TREY");
     }
 

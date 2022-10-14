@@ -60,7 +60,7 @@ static void set_tracer_transport_derived_values (
       }
     });
   }
-  ExecSpace::impl_static_fence();
+  ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
   GPTLstop("tl-s deep_copy+derived_dp");  
 }
 

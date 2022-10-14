@@ -497,7 +497,7 @@ void BoundaryExchange::pack_and_send ()
         });
     }
   }
-  ExecSpace::impl_static_fence();
+  ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
 
   // ---- Send ---- //
   tstart("be sync_send_buffer");
@@ -785,7 +785,7 @@ void BoundaryExchange::recv_and_unpack (const ExecViewUnmanaged<const Real * [NP
         });
     }
   }
-  ExecSpace::impl_static_fence();
+  ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
 
   // If another BE structure starts an exchange, it has no way to check that
   // this object has finished its send requests, and may erroneously reuse the
@@ -905,7 +905,7 @@ void BoundaryExchange::pack_and_send_min_max ()
         }
       });
   }
-  ExecSpace::impl_static_fence();
+  ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
 
   // ---- Send ---- //
   m_buffers_manager->sync_send_buffer(this);
@@ -1023,7 +1023,7 @@ void BoundaryExchange::recv_and_unpack_min_max ()
         }
       });
   }
-  ExecSpace::impl_static_fence();
+  ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
 
   // If another BE structure starts an exchange, it has no way to check that
   // this object has finished its send requests, and may erroneously reuse the
