@@ -239,7 +239,6 @@ struct CaarFunctorImpl {
       auto &omega_p = m_buffers.omega_p;
       auto &p = m_buffers.pressure;
       auto &pressure_grad = m_buffers.pressure_grad;
-      auto &temperature_grad = m_buffers.temperature_grad;
       auto &t_v = m_buffers.temperature_virt;
       auto &vdp = m_buffers.vdp;
       auto &vorticity = m_buffers.vorticity;
@@ -274,11 +273,11 @@ struct CaarFunctorImpl {
           const int j = tr % NP;
 
           static constexpr int PER_POINT = NPNP * NUM_LEV * sizeof(Real);
-          Real *const gv0 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
+          Real *const tmp0 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
           static constexpr int NPL = NP * NUM_LEV;
-          Real *const gv0ij = gv0 + i * NPL + j * NUM_LEV;
-          Real *const gv1 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
-          Real *const gv1ij = gv1 + i * NPL + j * NUM_LEV;
+          Real *const tmp0ij = tmp0 + i * NPL + j * NUM_LEV;
+          Real *const tmp1 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
+          Real *const tmp1ij = tmp1 + i * NPL + j * NUM_LEV;
 
           Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(NPNP * sizeof(Real)));
 
@@ -309,8 +308,8 @@ struct CaarFunctorImpl {
               vn00ij[k] += eta * vdp0ij[k];
               vdp1ij[k] = v01ij[k] * dp0ij[k];
               vn01ij[k] += eta * vdp1ij[k];
-              gv0ij[k] = (dinv00ij * vdp0ij[k] + dinv10ij * vdp1ij[k]) * metdetij;
-              gv1ij[k] = (dinv01ij * vdp0ij[k] + dinv11ij * vdp1ij[k]) * metdetij;
+              tmp0ij[k] = (dinv00ij * vdp0ij[k] + dinv10ij * vdp1ij[k]) * metdetij;
+              tmp1ij[k] = (dinv01ij * vdp0ij[k] + dinv11ij * vdp1ij[k]) * metdetij;
             });
 
           team.team_barrier();
@@ -326,7 +325,7 @@ struct CaarFunctorImpl {
             [&](const int k) {
               Real dudv = 0;
               for (int h = 0; h < NP; h++) {
-                dudv += dvvj[h] * gv0[i * NPL + h * NUM_LEV + k] + dvvi[h] * gv1[h * NPL + j * NUM_LEV + k];
+                dudv += dvvj[h] * tmp0[i * NPL + h * NUM_LEV + k] + dvvi[h] * tmp1[h * NPL + j * NUM_LEV + k];
               }
               div_vdpij[k] = dudv * rmetdetij;
             });
@@ -343,22 +342,23 @@ struct CaarFunctorImpl {
               if (last) pij[k+1] = sum;
             });
 
-          Real *const KOKKOS_RESTRICT rgas_tv_dp_over_p = &(temperature_grad(ie,0,i,j,0)[0]);
-          Real *const KOKKOS_RESTRICT integration = &(temperature_grad(ie,1,i,j,0)[0]);
+          team.team_barrier();
 
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
-              rgas_tv_dp_over_p[k] = PhysicalConstants::Rgas * tvij[k] * (dp0ij[k] * 0.5 / pij[k]);
-              integration[k] = 0;
+              tmp0ij[k] = PhysicalConstants::Rgas * tvij[k] * (dp0ij[k] * 0.5 / pij[k]);
+              tmp1ij[k] = 0;
             });
+
+          team.team_barrier();
 
           Kokkos::parallel_scan(
             Kokkos::ThreadVectorRange(team, NUM_LEV-1),
             [&](const int k, Real &accumulator, const bool last) {
               const int level = NUM_LEV-1-k;
-              accumulator += rgas_tv_dp_over_p[level];
-              if (last) integration[level-1] = accumulator;
+              accumulator += tmp0ij[level];
+              if (last) tmp1ij[level-1] = accumulator;
             });
 
           const Real phisij = phis(ie,i,j);
@@ -366,7 +366,7 @@ struct CaarFunctorImpl {
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
-              ephisij[k] = phisij + 2.0 * integration[k] + rgas_tv_dp_over_p[k];
+              ephisij[k] = phisij + 2.0 * tmp1ij[k] + tmp0ij[k];
             });
 
           Real *const KOKKOS_RESTRICT pg0ij = &(pressure_grad(ie,0,i,j,0)[0]);
@@ -397,9 +397,6 @@ struct CaarFunctorImpl {
 
           team.team_barrier();
 
-          Real *const KOKKOS_RESTRICT tg0ij = rgas_tv_dp_over_p;
-          Real *const KOKKOS_RESTRICT tg1ij = integration;
-
           const Real *const tnm1ij = &(t(ie,nm1,i,j,0)[0]);
           Real *const KOKKOS_RESTRICT derived_omega_pij = &(derived_omega_p(ie,i,j,0)[0]);
           const Real *const t0 = &t(ie,n0,0,0,0)[0];
@@ -420,10 +417,10 @@ struct CaarFunctorImpl {
               }
               v0 *= rrearth;
               v1 *= rrearth;
-              tg0ij[k] = dinv00ij * v0 + dinv01ij * v1;
-              tg1ij[k] = dinv10ij * v0 + dinv11ij * v1;
+              const Real tg0 = dinv00ij * v0 + dinv01ij * v1;
+              const Real tg1 = dinv10ij * v0 + dinv11ij * v1;
 
-              const Real vgrad_t = v00ij[k] * tg0ij[k] + v01ij[k] * tg1ij[k];
+              const Real vgrad_t = v00ij[k] * tg0 + v01ij[k] * tg1;
               const Real ttens = -vgrad_t + PhysicalConstants::kappa * tvij[k] * omega_pij[k];
               tnp1ij[k] = (ttens * dt + tnm1ij[k]) * spherempij;
             });
@@ -462,8 +459,8 @@ struct CaarFunctorImpl {
 
               const Real v0 = v00ij[k];
               const Real v1 = v01ij[k];
-              gv0ij[k] = d00ij * v0 + d01ij * v1;
-              gv1ij[k] = d10ij * v0 + d11ij * v1;
+              tmp0ij[k] = d00ij * v0 + d01ij * v1;
+              tmp1ij[k] = d10ij * v0 + d11ij * v1;
             });
 
           team.team_barrier();
@@ -483,7 +480,7 @@ struct CaarFunctorImpl {
 
               Real dvdu = 0;
               for (int h = 0; h < NP; h++) {
-                dvdu += dvvj[h] * gv1[i * NPL + h * NUM_LEV + k] - dvvi[h] * gv0[h * NPL + j * NUM_LEV + k];
+                dvdu += dvvj[h] * tmp1[i * NPL + h * NUM_LEV + k] - dvvi[h] * tmp0[h * NPL + j * NUM_LEV + k];
               }
               vortij[k] = dvdu * rmetdetij + fcorij;
               
@@ -518,7 +515,7 @@ struct CaarFunctorImpl {
     ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
     GPTLstop("caar compute");
 
-    if (false) { // TREY
+    if (m_num_elems == 24) { // TREY
 
       using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
       using Team = TeamPolicy::member_type;
@@ -560,7 +557,7 @@ struct CaarFunctorImpl {
         });
 
       ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
-      printf("TREY 3\n");
+      printf("TREY 5\n");
       Kokkos::abort("TREY");
     }
 
