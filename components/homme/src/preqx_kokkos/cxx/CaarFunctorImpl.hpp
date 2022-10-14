@@ -214,7 +214,9 @@ struct CaarFunctorImpl {
     profiling_resume();
     GPTLstart("caar compute");
 
-    if (m_data.n0_qdp < 0) {
+    if ((m_data.n0_qdp < 0) && (m_rsplit != 0)) {
+    //if (false) {
+      // TREY
 
       static_assert(VECTOR_SIZE == 1, "VECTOR_SIZE != 1");
 
@@ -233,6 +235,7 @@ struct CaarFunctorImpl {
       auto &div_vdp = m_buffers.div_vdp;
       auto &energy_grad = m_buffers.energy_grad;
       auto &ephis = m_buffers.ephi;
+      auto &eta_dot_dpdn = m_buffers.eta_dot_dpdn;
       auto &omega_p = m_buffers.omega_p;
       auto &p = m_buffers.pressure;
       auto &pressure_grad = m_buffers.pressure_grad;
@@ -259,8 +262,6 @@ struct CaarFunctorImpl {
 
       static constexpr int NPNP = NP * NP;
 
-      if (m_rsplit == 0) Errors::runtime_abort("rsplit == 0 not implemented");
-
       Kokkos::parallel_for(
         TeamPolicy(m_num_elems, NP*NP, warpSize).
         set_scratch_size(0,Kokkos::PerTeam((2 * NPNP * NUM_LEV + NPNP) * sizeof(Real))),
@@ -275,7 +276,7 @@ struct CaarFunctorImpl {
           const Real *const t0ij = &t(ie,n0,i,j,0)[0];
           Real *const KOKKOS_RESTRICT tvij = &t_v(ie,i,j,0)[0];
 
-          const Real *const dpij = &dp3d(ie,n0,i,j,0)[0]; 
+          const Real *const dp0ij = &dp3d(ie,n0,i,j,0)[0]; 
 
           const Real *const v00ij = &v(ie,n0,0,i,j,0)[0];
           Real *const KOKKOS_RESTRICT vdp0ij = &vdp(ie,0,i,j,0)[0];
@@ -304,9 +305,9 @@ struct CaarFunctorImpl {
             [&](const int k) {
               if (k == 0) dvv[i * NP + j] = dvvv(i,j);
               tvij[k] = t0ij[k];
-              vdp0ij[k] = v00ij[k] * dpij[k];
+              vdp0ij[k] = v00ij[k] * dp0ij[k];
               vn00ij[k] += eta * vdp0ij[k];
-              vdp1ij[k] = v01ij[k] * dpij[k];
+              vdp1ij[k] = v01ij[k] * dp0ij[k];
               vn01ij[k] += eta * vdp1ij[k];
               gv0ij[k] = (dinv00ij * vdp0ij[k] + dinv10ij * vdp1ij[k]) * metdetij;
               gv1ij[k] = (dinv01ij * vdp0ij[k] + dinv11ij * vdp1ij[k]) * metdetij;
@@ -331,14 +332,14 @@ struct CaarFunctorImpl {
             });
 
           Real *const KOKKOS_RESTRICT pij = &p(ie,i,j,0)[0];
-          const Real p0 = aips0 + 0.5 * dpij[0];
+          const Real p0 = aips0 + 0.5 * dp0ij[0];
           pij[0] = p0;
 
           Kokkos::parallel_scan(
             Kokkos::ThreadVectorRange(team, NUM_LEV-1),
             [&](const int k, Real &sum, const bool last) {
               sum += (k == 0 ? p0 : 0);
-              sum += 0.5 * (dpij[k] + dpij[k+1]);
+              sum += 0.5 * (dp0ij[k] + dp0ij[k+1]);
               if (last) pij[k+1] = sum;
             });
 
@@ -348,7 +349,7 @@ struct CaarFunctorImpl {
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
-              rgas_tv_dp_over_p[k] = PhysicalConstants::Rgas * tvij[k] * (dpij[k] * 0.5 / pij[k]);
+              rgas_tv_dp_over_p[k] = PhysicalConstants::Rgas * tvij[k] * (dp0ij[k] * 0.5 / pij[k]);
               integration[k] = 0;
             });
 
@@ -473,6 +474,9 @@ struct CaarFunctorImpl {
           Real *const KOKKOS_RESTRICT vortij = &(vorticity(ie,i,j,0)[0]);
           Real *const KOKKOS_RESTRICT vnp10ij = &(v(ie,np1,0,i,j,0)[0]);
           Real *const KOKKOS_RESTRICT vnp11ij = &(v(ie,np1,1,i,j,0)[0]);
+          const Real *const eta_dot_dpdnij = &(eta_dot_dpdn(ie,i,j,0)[0]);
+          const Real *const dpnm1ij = &(dp3d(ie,nm1,i,j,0)[0]);
+          Real *const KOKKOS_RESTRICT dpnp1ij = &(dp3d(ie,np1,i,j,0)[0]);
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
@@ -495,15 +499,70 @@ struct CaarFunctorImpl {
 
               vnp10ij[k] = spherempij * eg0ij[k];
               vnp11ij[k] = spherempij * eg1ij[k];
+
+              Real tmp = (k + 1 < NUM_LEV) ? eta_dot_dpdnij[k+1] : 0;
+              tmp += div_vdpij[k];
+              tmp -= eta_dot_dpdnij[k];
+              tmp = dpnm1ij[k] - tmp * dt;
+              dpnp1ij[k] = spherempij * tmp;
             });
 
         // TREY
         });
+
+    } else {
+
+      Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
+
     }
-    Kokkos::parallel_for("caar loop pre-boundary exchange", m_policy, *this);
     ExecSpace::impl_static_fence();
     GPTLstop("caar compute");
-    Kokkos::abort("TREY 29");
+
+    if (false) {
+
+      using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
+      using Team = TeamPolicy::member_type;
+
+      const int np1 = m_data.np1;
+      const auto &div_vdp = m_buffers.div_vdp;
+      const auto &pressure = m_buffers.pressure;
+      const auto &vdp = m_buffers.vdp;
+      const auto &vn0 = m_derived.m_vn0;
+      const auto &dp3d = m_state.m_dp3d;
+      const auto &v = m_state.m_v;
+
+      Kokkos::parallel_for(
+        TeamPolicy(m_num_elems, NP*NP, warpSize),
+        KOKKOS_LAMBDA(const Team &team) {
+
+          const int ie = team.league_rank();
+
+          const int tr = team.team_rank();
+          const int i = tr / NP;
+          const int j = tr % NP;
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int k) {
+              printf("TREY %d %d %d %d %d dp3d %g v0 %g v1 %g div_vdp %g p %g vdp %g %g vn0 %g %g\n",
+                     ie, np1, i, j, k,
+                     dp3d(ie, np1, i, j, k)[0],
+                     v(ie, np1, 0, i, j, k)[0],
+                     v(ie, np1, 1, i, j, k)[0],
+                     div_vdp(ie, i, j, k)[0],
+                     pressure(ie, i, j, k)[0],
+                     vdp(ie, 0, i, j, k)[0],
+                     vdp(ie, 1, i, j, k)[0],
+                     vn0(ie, 0, i, j, k)[0],
+                     vn0(ie, 1, i, j, k)[0]
+                    );
+            });
+        });
+
+      ExecSpace::impl_static_fence();
+      printf("TREY 1\n");
+      Kokkos::abort("TREY");
+    }
 
     GPTLstart("caar_bexchV");
     m_bes[data.np1]->exchange(m_geometry.m_rspheremp);
@@ -561,9 +620,9 @@ struct CaarFunctorImpl {
       preq_vertadv(kv);
       accumulate_eta_dot_dpdn(kv);
     }
-    //compute_omega_p(kv);
-    //compute_temperature_np1(kv);
-    //compute_velocity_np1(kv);
+    compute_omega_p(kv);
+    compute_temperature_np1(kv);
+    compute_velocity_np1(kv);
     compute_dp3d_np1(kv);
   } // TRIVIAL
   //is it?
@@ -913,6 +972,7 @@ struct CaarFunctorImpl {
         m_state.m_dp3d(kv.ie, m_data.np1, igp, jgp, ilev) =
             m_geometry.m_spheremp(kv.ie, igp, jgp) * tmp;
 
+#if 0
         printf("TREY %d %d %d %d %d dp3d %g v0 %g v1 %g div_vdp %g p %g vdp %g %g vn0 %g %g\n",
                kv.ie, m_data.np1, igp, jgp, ilev,
                m_state.m_dp3d(kv.ie, m_data.np1, igp, jgp, ilev)[0],
@@ -925,6 +985,7 @@ struct CaarFunctorImpl {
                m_derived.m_vn0(kv.ie, 0, igp, jgp, ilev)[0],
                m_derived.m_vn0(kv.ie, 1, igp, jgp, ilev)[0]
               );
+#endif
       });
     });
     kv.team_barrier();
@@ -1038,10 +1099,10 @@ struct CaarFunctorImpl {
   void operator()(const TeamMember &team) const {
     KernelVariables kv(team);
 
-    //compute_temperature_div_vdp(kv);
+    compute_temperature_div_vdp(kv);
     kv.team.team_barrier();
 
-    //compute_scan_properties(kv);
+    compute_scan_properties(kv);
     kv.team.team_barrier();
 
     compute_phase_3(kv);
