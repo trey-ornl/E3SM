@@ -239,7 +239,6 @@ struct CaarFunctorImpl {
       auto &omega_p = m_buffers.omega_p;
       auto &p = m_buffers.pressure;
       auto &pressure_grad = m_buffers.pressure_grad;
-      auto &t_v = m_buffers.temperature_virt;
       auto &vdp = m_buffers.vdp;
       auto &vorticity = m_buffers.vorticity;
 
@@ -263,7 +262,7 @@ struct CaarFunctorImpl {
 
       Kokkos::parallel_for(
         TeamPolicy(m_num_elems, NP*NP, warpSize).
-        set_scratch_size(0,Kokkos::PerTeam((2 * NPNP * NUM_LEV + NPNP) * sizeof(Real))),
+        set_scratch_size(0,Kokkos::PerTeam((3 * NPNP * NUM_LEV + NPNP) * sizeof(Real))),
         KOKKOS_LAMBDA(const Team &team) {
 
           const int ie = team.league_rank();
@@ -275,14 +274,14 @@ struct CaarFunctorImpl {
           static constexpr int PER_POINT = NPNP * NUM_LEV * sizeof(Real);
           Real *const tmp0 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
           static constexpr int NPL = NP * NUM_LEV;
-          Real *const tmp0ij = tmp0 + i * NPL + j * NUM_LEV;
+          const int ijl = i * NPL + j * NUM_LEV;
+          Real *const tmp0ij = tmp0 + ijl;
           Real *const tmp1 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
-          Real *const tmp1ij = tmp1 + i * NPL + j * NUM_LEV;
+          Real *const tmp1ij = tmp1 + ijl;
+          Real *const tv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
+          Real *const tvij = tv + ijl;
 
           Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(NPNP * sizeof(Real)));
-
-          const Real *const t0ij = &t(ie,n0,i,j,0)[0];
-          Real *const KOKKOS_RESTRICT tvij = &t_v(ie,i,j,0)[0];
 
           const Real *const dp0ij = &dp3d(ie,n0,i,j,0)[0]; 
 
@@ -292,6 +291,7 @@ struct CaarFunctorImpl {
           const Real *const v01ij = &v(ie,n0,1,i,j,0)[0];
           Real *const KOKKOS_RESTRICT vdp1ij = &vdp(ie,1,i,j,0)[0];
           Real *const KOKKOS_RESTRICT vn01ij = &vn0(ie,1,i,j,0)[0];
+          const Real *const t0ij = &t(ie,n0,i,j,0)[0];
 
           const Real metdetij = metdet(ie,i,j);
           const Real dinv00ij = dinv(ie,0,0,i,j);
@@ -399,7 +399,6 @@ struct CaarFunctorImpl {
 
           const Real *const tnm1ij = &(t(ie,nm1,i,j,0)[0]);
           Real *const KOKKOS_RESTRICT derived_omega_pij = &(derived_omega_p(ie,i,j,0)[0]);
-          const Real *const t0 = &t(ie,n0,0,0,0)[0];
           const Real spherempij = spheremp(ie,i,j);
           Real *const KOKKOS_RESTRICT tnp1ij = &(t(ie,np1,i,j,0)[0]);
           Kokkos::parallel_for(
@@ -412,8 +411,8 @@ struct CaarFunctorImpl {
               Real v0 = 0;
               Real v1 = 0;
               for (int h = 0; h < NP; h++) {
-                v0 += dvvj[h] * t0[i * NPL + h * NUM_LEV + k];
-                v1 += dvvi[h] * t0[h * NPL + j * NUM_LEV + k];
+                v0 += dvvj[h] * tv[i * NPL + h * NUM_LEV + k];
+                v1 += dvvi[h] * tv[h * NPL + j * NUM_LEV + k];
               }
               v0 *= rrearth;
               v1 *= rrearth;
@@ -557,7 +556,7 @@ struct CaarFunctorImpl {
         });
 
       ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
-      printf("TREY 5\n");
+      printf("TREY 6\n");
       Kokkos::abort("TREY");
     }
 
