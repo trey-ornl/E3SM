@@ -232,13 +232,11 @@ struct CaarFunctorImpl {
       const Real eta = m_data.eta_ave_w;
       const Real rrearth = m_sphere_ops.m_rrearth;
 
-      auto &energy_grad = m_buffers.energy_grad;
       auto &ephis = m_buffers.ephi;
       auto &eta_dot_dpdn = m_buffers.eta_dot_dpdn;
       auto &omega_p = m_buffers.omega_p;
       auto &p = m_buffers.pressure;
       auto &pressure_grad = m_buffers.pressure_grad;
-      auto &vorticity = m_buffers.vorticity;
 
       auto &derived_omega_p = m_derived.m_omega_p;
       auto &vn0 = m_derived.m_vn0;
@@ -421,14 +419,9 @@ struct CaarFunctorImpl {
               tnp1ij[k] = (ttens * dt + tnm1ij[k]) * spherempij;
             });
 
-          Real *const KOKKOS_RESTRICT eg0ij = &(energy_grad(ie,0,i,j,0)[0]);
-          Real *const KOKKOS_RESTRICT eg1ij = &(energy_grad(ie,1,i,j,0)[0]);
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
-              const Real rtdp = PhysicalConstants::Rgas * tvij[k] / pij[k];
-              eg0ij[k] = rtdp * pg0ij[k];
-              eg1ij[k] = rtdp * pg1ij[k];
               ephisij[k] += 0.5 * (v00ij[k] * v00ij[k] + v01ij[k] * v01ij[k]);
             });
 
@@ -438,21 +431,9 @@ struct CaarFunctorImpl {
           const Real d01ij = d(ie,0,1,i,j);
           const Real d10ij = d(ie,1,0,i,j);
           const Real d11ij = d(ie,1,1,i,j);
-          const Real *const ephisie = &(ephis(ie,0,0,0)[0]);
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
-              Real dsdx = 0;
-              Real dsdy = 0;
-              for (int h = 0; h < NP; h++) {
-                dsdx += dvvj[h] * ephisie[i * NPL + h * NUM_LEV + k];
-                dsdy += dvvi[h] * ephisie[h * NPL + j * NUM_LEV + k];
-              }
-              dsdx *= rrearth;
-              dsdy *= rrearth;
-              eg0ij[k] += dinv00ij * dsdx + dinv01ij * dsdy;
-              eg1ij[k] += dinv10ij * dsdx + dinv11ij * dsdy;
-
               const Real v0 = v00ij[k];
               const Real v1 = v01ij[k];
               tmp0ij[k] = d00ij * v0 + d01ij * v1;
@@ -461,10 +442,10 @@ struct CaarFunctorImpl {
 
           team.team_barrier();
 
+          const Real *const ephisie = &(ephis(ie,0,0,0)[0]);
           const Real fcorij = fcor(ie,i,j);
           const Real *const vnm10ij = &(v(ie,nm1,0,i,j,0)[0]);
           const Real *const vnm11ij = &(v(ie,nm1,1,i,j,0)[0]);
-          Real *const KOKKOS_RESTRICT vortij = &(vorticity(ie,i,j,0)[0]);
           Real *const KOKKOS_RESTRICT vnp10ij = &(v(ie,np1,0,i,j,0)[0]);
           Real *const KOKKOS_RESTRICT vnp11ij = &(v(ie,np1,1,i,j,0)[0]);
           const Real *const eta_dot_dpdnij = &(eta_dot_dpdn(ie,i,j,0)[0]);
@@ -478,20 +459,32 @@ struct CaarFunctorImpl {
               for (int h = 0; h < NP; h++) {
                 dvdu += dvvj[h] * tmp1[i * NPL + h * NUM_LEV + k] - dvvi[h] * tmp0[h * NPL + j * NUM_LEV + k];
               }
-              vortij[k] = dvdu * rmetdetij + fcorij;
+              const Real vort = dvdu * rmetdetij + fcorij;
               
-              eg0ij[k] *= -1;
-              eg0ij[k] += v01ij[k] * vortij[k];
-              eg0ij[k] *= dt;
-              eg0ij[k] += vnm10ij[k];
+              Real dsdx = 0;
+              Real dsdy = 0;
+              for (int h = 0; h < NP; h++) {
+                dsdx += dvvj[h] * ephisie[i * NPL + h * NUM_LEV + k];
+                dsdy += dvvi[h] * ephisie[h * NPL + j * NUM_LEV + k];
+              }
+              dsdx *= rrearth;
+              dsdy *= rrearth;
 
-              eg1ij[k] *= -1;
-              eg1ij[k] -= v00ij[k] * vortij[k];
-              eg1ij[k] *= dt;
-              eg1ij[k] += vnm11ij[k];
+              const Real rtdp = PhysicalConstants::Rgas * tvij[k] / pij[k];
 
-              vnp10ij[k] = spherempij * eg0ij[k];
-              vnp11ij[k] = spherempij * eg1ij[k];
+              Real eg0 = rtdp * pg0ij[k] + dinv00ij * dsdx + dinv01ij * dsdy;
+              eg0 *= -1;
+              eg0 += v01ij[k] * vort;
+              eg0 *= dt;
+              eg0 += vnm10ij[k];
+              vnp10ij[k] = spherempij * eg0;
+
+              Real eg1 = rtdp * pg1ij[k] + dinv10ij * dsdx + dinv11ij * dsdy;
+              eg1 *= -1;
+              eg1 -= v00ij[k] * vort;
+              eg1 *= dt;
+              eg1 += vnm11ij[k];
+              vnp11ij[k] = spherempij * eg1;
 
               Real tmp = (k + 1 < NUM_LEV) ? eta_dot_dpdnij[k+1] : 0;
               tmp += div_vdpij[k];
@@ -546,7 +539,7 @@ struct CaarFunctorImpl {
         });
 
       ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
-      printf("TREY 8\n");
+      printf("TREY 10\n");
       Kokkos::abort("TREY");
     }
 
