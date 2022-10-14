@@ -232,7 +232,6 @@ struct CaarFunctorImpl {
       const Real eta = m_data.eta_ave_w;
       const Real rrearth = m_sphere_ops.m_rrearth;
 
-      auto &div_vdp = m_buffers.div_vdp;
       auto &energy_grad = m_buffers.energy_grad;
       auto &ephis = m_buffers.ephi;
       auto &eta_dot_dpdn = m_buffers.eta_dot_dpdn;
@@ -261,7 +260,7 @@ struct CaarFunctorImpl {
 
       Kokkos::parallel_for(
         TeamPolicy(m_num_elems, NP*NP, warpSize).
-        set_scratch_size(0,Kokkos::PerTeam((3 * NPNP * NUM_LEV + NPNP) * sizeof(Real))),
+        set_scratch_size(0,Kokkos::PerTeam((4 * NPNP * NUM_LEV + NPNP) * sizeof(Real))),
         KOKKOS_LAMBDA(const Team &team) {
 
           const int ie = team.league_rank();
@@ -315,7 +314,8 @@ struct CaarFunctorImpl {
           const Real *const dvvj = dvv + j * NP;
 
           const Real rmetdetij = 1.0 / metdetij * rrearth;
-          Real *const KOKKOS_RESTRICT div_vdpij = &div_vdp(ie,i,j,0)[0];
+          Real *const div_vdp = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
+          Real *const div_vdpij = div_vdp + ijl;
 
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
@@ -517,8 +517,6 @@ struct CaarFunctorImpl {
       using Team = TeamPolicy::member_type;
 
       const int np1 = m_data.np1;
-      const auto &div_vdp = m_buffers.div_vdp;
-      const auto &pressure = m_buffers.pressure;
       const auto &vn0 = m_derived.m_vn0;
       const auto &dp3d = m_state.m_dp3d;
       const auto &v = m_state.m_v;
@@ -536,13 +534,11 @@ struct CaarFunctorImpl {
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
-              printf("TREY %d %d %d %d %d dp3d %g v0 %g v1 %g div_vdp %g p %g vn0 %g %g\n",
+              printf("TREY %d %d %d %d %d dp3d %g v0 %g v1 %g vn0 %g %g\n",
                      ie, np1, i, j, k,
                      dp3d(ie, np1, i, j, k)[0],
                      v(ie, np1, 0, i, j, k)[0],
                      v(ie, np1, 1, i, j, k)[0],
-                     div_vdp(ie, i, j, k)[0],
-                     pressure(ie, i, j, k)[0],
                      vn0(ie, 0, i, j, k)[0],
                      vn0(ie, 1, i, j, k)[0]
                     );
@@ -550,7 +546,7 @@ struct CaarFunctorImpl {
         });
 
       ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
-      printf("TREY 7\n");
+      printf("TREY 8\n");
       Kokkos::abort("TREY");
     }
 
