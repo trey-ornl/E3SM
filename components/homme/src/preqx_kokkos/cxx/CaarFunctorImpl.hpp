@@ -239,7 +239,6 @@ struct CaarFunctorImpl {
       auto &omega_p = m_buffers.omega_p;
       auto &p = m_buffers.pressure;
       auto &pressure_grad = m_buffers.pressure_grad;
-      auto &vdp = m_buffers.vdp;
       auto &vorticity = m_buffers.vorticity;
 
       auto &derived_omega_p = m_derived.m_omega_p;
@@ -286,10 +285,8 @@ struct CaarFunctorImpl {
           const Real *const dp0ij = &dp3d(ie,n0,i,j,0)[0]; 
 
           const Real *const v00ij = &v(ie,n0,0,i,j,0)[0];
-          Real *const KOKKOS_RESTRICT vdp0ij = &vdp(ie,0,i,j,0)[0];
           Real *const KOKKOS_RESTRICT vn00ij = &vn0(ie,0,i,j,0)[0];
           const Real *const v01ij = &v(ie,n0,1,i,j,0)[0];
-          Real *const KOKKOS_RESTRICT vdp1ij = &vdp(ie,1,i,j,0)[0];
           Real *const KOKKOS_RESTRICT vn01ij = &vn0(ie,1,i,j,0)[0];
           const Real *const t0ij = &t(ie,n0,i,j,0)[0];
 
@@ -304,12 +301,12 @@ struct CaarFunctorImpl {
             [&](const int k) {
               if (k == 0) dvv[i * NP + j] = dvvv(i,j);
               tvij[k] = t0ij[k];
-              vdp0ij[k] = v00ij[k] * dp0ij[k];
-              vn00ij[k] += eta * vdp0ij[k];
-              vdp1ij[k] = v01ij[k] * dp0ij[k];
-              vn01ij[k] += eta * vdp1ij[k];
-              tmp0ij[k] = (dinv00ij * vdp0ij[k] + dinv10ij * vdp1ij[k]) * metdetij;
-              tmp1ij[k] = (dinv01ij * vdp0ij[k] + dinv11ij * vdp1ij[k]) * metdetij;
+              const Real vdp0 = v00ij[k] * dp0ij[k];
+              vn00ij[k] += eta * vdp0;
+              const Real vdp1 = v01ij[k] * dp0ij[k];
+              vn01ij[k] += eta * vdp1;
+              tmp0ij[k] = (dinv00ij * vdp0 + dinv10ij * vdp1) * metdetij;
+              tmp1ij[k] = (dinv01ij * vdp0 + dinv11ij * vdp1) * metdetij;
             });
 
           team.team_barrier();
@@ -522,7 +519,6 @@ struct CaarFunctorImpl {
       const int np1 = m_data.np1;
       const auto &div_vdp = m_buffers.div_vdp;
       const auto &pressure = m_buffers.pressure;
-      const auto &vdp = m_buffers.vdp;
       const auto &vn0 = m_derived.m_vn0;
       const auto &dp3d = m_state.m_dp3d;
       const auto &v = m_state.m_v;
@@ -540,15 +536,13 @@ struct CaarFunctorImpl {
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
-              printf("TREY %d %d %d %d %d dp3d %g v0 %g v1 %g div_vdp %g p %g vdp %g %g vn0 %g %g\n",
+              printf("TREY %d %d %d %d %d dp3d %g v0 %g v1 %g div_vdp %g p %g vn0 %g %g\n",
                      ie, np1, i, j, k,
                      dp3d(ie, np1, i, j, k)[0],
                      v(ie, np1, 0, i, j, k)[0],
                      v(ie, np1, 1, i, j, k)[0],
                      div_vdp(ie, i, j, k)[0],
                      pressure(ie, i, j, k)[0],
-                     vdp(ie, 0, i, j, k)[0],
-                     vdp(ie, 1, i, j, k)[0],
                      vn0(ie, 0, i, j, k)[0],
                      vn0(ie, 1, i, j, k)[0]
                     );
@@ -556,7 +550,7 @@ struct CaarFunctorImpl {
         });
 
       ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
-      printf("TREY 6\n");
+      printf("TREY 7\n");
       Kokkos::abort("TREY");
     }
 
