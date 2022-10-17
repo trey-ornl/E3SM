@@ -233,7 +233,6 @@ struct CaarFunctorImpl {
       const Real rrearth = m_sphere_ops.m_rrearth;
 
       auto &ephis = m_buffers.ephi;
-      auto &eta_dot_dpdn = m_buffers.eta_dot_dpdn;
       auto &omega_p = m_buffers.omega_p;
       auto &p = m_buffers.pressure;
       auto &pressure_grad = m_buffers.pressure_grad;
@@ -364,6 +363,8 @@ struct CaarFunctorImpl {
               ephisij[k] = phisij + 2.0 * tmp1ij[k] + tmp0ij[k];
             });
 
+          team.team_barrier();
+
           Real *const KOKKOS_RESTRICT pg0ij = &(pressure_grad(ie,0,i,j,0)[0]);
           Real *const KOKKOS_RESTRICT pg1ij = &(pressure_grad(ie,1,i,j,0)[0]);
           const Real *const pie = &(p(ie,0,0,0)[0]);
@@ -382,11 +383,10 @@ struct CaarFunctorImpl {
               pg1ij[k] = dinv10ij * v0 + dinv11ij * v1;
             });
 
-          Real *const KOKKOS_RESTRICT omega_pij = &(omega_p(ie,i,j,0)[0]);
           Kokkos::parallel_scan(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k, Real &accumulator, const bool last) {
-              if (last) omega_pij[k] = accumulator;
+              if (last) tmp0ij[k] = accumulator;
               accumulator += div_vdpij[k];
             });
 
@@ -400,8 +400,8 @@ struct CaarFunctorImpl {
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
               const Real vgrad_p = v00ij[k] * pg0ij[k] + v01ij[k] * pg1ij[k];
-              omega_pij[k] = (vgrad_p - (omega_pij[k] + 0.5 * div_vdpij[k])) / pij[k];
-              derived_omega_pij[k] = eta * omega_pij[k];
+              tmp0ij[k] = (vgrad_p - (tmp0ij[k] + 0.5 * div_vdpij[k])) / pij[k];
+              derived_omega_pij[k] = eta * tmp0ij[k];
 
               Real v0 = 0;
               Real v1 = 0;
@@ -415,7 +415,7 @@ struct CaarFunctorImpl {
               const Real tg1 = dinv10ij * v0 + dinv11ij * v1;
 
               const Real vgrad_t = v00ij[k] * tg0 + v01ij[k] * tg1;
-              const Real ttens = -vgrad_t + PhysicalConstants::kappa * tvij[k] * omega_pij[k];
+              const Real ttens = -vgrad_t + PhysicalConstants::kappa * tvij[k] * tmp0ij[k];
               tnp1ij[k] = (ttens * dt + tnm1ij[k]) * spherempij;
             });
 
@@ -448,7 +448,6 @@ struct CaarFunctorImpl {
           const Real *const vnm11ij = &(v(ie,nm1,1,i,j,0)[0]);
           Real *const KOKKOS_RESTRICT vnp10ij = &(v(ie,np1,0,i,j,0)[0]);
           Real *const KOKKOS_RESTRICT vnp11ij = &(v(ie,np1,1,i,j,0)[0]);
-          const Real *const eta_dot_dpdnij = &(eta_dot_dpdn(ie,i,j,0)[0]);
           const Real *const dpnm1ij = &(dp3d(ie,nm1,i,j,0)[0]);
           Real *const KOKKOS_RESTRICT dpnp1ij = &(dp3d(ie,np1,i,j,0)[0]);
           Kokkos::parallel_for(
@@ -486,11 +485,7 @@ struct CaarFunctorImpl {
               eg1 += vnm11ij[k];
               vnp11ij[k] = spherempij * eg1;
 
-              Real tmp = (k + 1 < NUM_LEV) ? eta_dot_dpdnij[k+1] : 0;
-              tmp += div_vdpij[k];
-              tmp -= eta_dot_dpdnij[k];
-              tmp = dpnm1ij[k] - tmp * dt;
-              dpnp1ij[k] = spherempij * tmp;
+              dpnp1ij[k] = spherempij * (dpnm1ij[k] - div_vdpij[k] * dt);
             });
 
         // TREY
@@ -539,7 +534,7 @@ struct CaarFunctorImpl {
         });
 
       ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
-      printf("TREY 10\n");
+      printf("TREY 12\n");
       Kokkos::abort("TREY");
     }
 
