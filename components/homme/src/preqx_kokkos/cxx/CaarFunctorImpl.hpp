@@ -337,8 +337,10 @@ struct CaarFunctorImpl {
 
           team.team_barrier();
 
-          Real *const KOKKOS_RESTRICT pg0ij = &(pressure_grad(ie,0,i,j,0)[0]);
-          Real *const KOKKOS_RESTRICT pg1ij = &(pressure_grad(ie,1,i,j,0)[0]);
+          Real *const pg0 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
+          Real *const pg1 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(PER_POINT));
+          Real *const KOKKOS_RESTRICT pg0ij = pg0 + ijl;
+          Real *const KOKKOS_RESTRICT pg1ij = pg1 + ijl;
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int k) {
@@ -536,7 +538,7 @@ struct CaarFunctorImpl {
         });
 
       ExecSpace::impl_static_fence(__PRETTY_FUNCTION__);
-      printf("TREY 16\n");
+      printf("TREY 17\n");
       Kokkos::abort("TREY");
     }
 
