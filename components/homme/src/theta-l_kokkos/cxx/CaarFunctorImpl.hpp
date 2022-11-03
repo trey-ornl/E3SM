@@ -3,6 +3,7 @@
  * This software is released under the BSD license
  * See the file 'COPYRIGHT' in the HOMMEXX/src/share/cxx directory
  *******************************************************************************/
+//#define PRINT_TREY
 
 #ifndef HOMMEXX_CAAR_FUNCTOR_IMPL_HPP
 #define HOMMEXX_CAAR_FUNCTOR_IMPL_HPP
@@ -337,6 +338,10 @@ struct CaarFunctorImpl {
     int nerr;
     Kokkos::parallel_reduce("caar loop pre-boundary exchange", m_policy_pre, *this, nerr);
     Kokkos::fence();
+#ifdef PRINT_TREY
+    fflush(stdout);
+    exit(0);
+#endif
     GPTLstop("caar compute");
     if (nerr > 0)
       check_print_abort_on_bad_elems("CaarFunctorImpl::run TagPreExchange", data.n0);
@@ -416,6 +421,28 @@ struct CaarFunctorImpl {
     // v_tens has been computed after last barrier. Need to make sure it's done
     kv.team_barrier();
     compute_v_np1(kv);
+
+#ifdef PRINT_TREY
+    kv.team_barrier();
+    Kokkos::parallel_for(
+      Kokkos::TeamThreadRange(kv.team,NP*NP),
+      [&](const int idx) {
+        const int igp = idx / NP;
+        const int jgp = idx % NP;
+        Kokkos::parallel_for(
+          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
+          [&](const int ilev) {
+            printf("TREY %d %d %d %d %d w_i %g phnh_i %g dp3d %g vtheta_dp %g v %g %g\n",
+                   kv.ie,m_data.np1,igp,jgp,ilev,
+                   m_state.m_w_i(kv.ie,m_data.np1,igp,jgp,ilev)[0],
+                   m_state.m_phinh_i(kv.ie,m_data.np1,igp,jgp,ilev)[0],
+                   m_state.m_dp3d(kv.ie,m_data.np1,igp,jgp,ilev)[0],
+                   m_state.m_vtheta_dp(kv.ie,m_data.np1,igp,jgp,ilev)[0],
+                   m_state.m_v(kv.ie,m_data.np1,0,igp,jgp,ilev)[0],
+                   m_state.m_v(kv.ie,m_data.np1,1,igp,jgp,ilev)[0]);
+          });
+      });
+#endif
   }
 
   KOKKOS_INLINE_FUNCTION
