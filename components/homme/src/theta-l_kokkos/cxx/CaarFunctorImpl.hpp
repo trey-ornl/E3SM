@@ -3,7 +3,6 @@
  * This software is released under the BSD license
  * See the file 'COPYRIGHT' in the HOMMEXX/src/share/cxx directory
  *******************************************************************************/
-//#define PRINT_TREY
 
 #ifndef HOMMEXX_CAAR_FUNCTOR_IMPL_HPP
 #define HOMMEXX_CAAR_FUNCTOR_IMPL_HPP
@@ -335,10 +334,100 @@ struct CaarFunctorImpl {
     profiling_resume();
 
     GPTLstart("caar compute");
+
+    // TREY
+    if ((m_rsplit > 0) && (!m_theta_hydrostatic_mode)) {
+    //if (false) {
+
+      static_assert(VECTOR_SIZE == 1, "VECTOR_SIZE != 1");
+      constexpr int NPNP = NP * NP;
+      constexpr int WARP_SIZE = warpSize;
+      constexpr int REAL_PER_NPNP = NPNP * sizeof(Real);
+      constexpr int REAL_PER_THREAD = REAL_PER_NPNP * WARP_SIZE;
+      constexpr int REAL_PER_POINT = REAL_PER_NPNP * NUM_LEV;
+      constexpr int LEV_PER_THREAD = NUM_LEV / WARP_SIZE;
+
+      using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
+      using Team = TeamPolicy::member_type;
+
+      auto &div_vdp_view = m_buffers.div_vdp;
+      auto &vdp_view = m_buffers.vdp;
+
+      const int n0 = m_data.n0;
+
+      const auto &dvv_view = m_sphere_ops.dvv;
+      const auto &dinv_view = m_sphere_ops.m_dinv;
+      const auto &metdet_view = m_sphere_ops.m_metdet;
+      const Real rrearth = m_sphere_ops.m_rrearth;
+
+      auto &dp3d_view = m_state.m_dp3d;
+      auto &v_view = m_state.m_v;
+
+      Kokkos::parallel_for(
+        "caar loop pre-boundary exchange lambda",
+        TeamPolicy(m_num_elems, NPNP, WARP_SIZE).
+        set_scratch_size(0, Kokkos::PerTeam(REAL_PER_NPNP + 2 * REAL_PER_THREAD)),
+        KOKKOS_LAMBDA(const Team &team) {
+
+          const int ie = team.league_rank();
+          const int tr = team.team_rank();
+          const int ix = tr / NP;
+          const int iy = tr % NP;
+
+          int iz = -1;
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, WARP_SIZE),
+            [&](const int k) {
+              iz = k;
+            });
+
+          Real *const tmp00 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_THREAD));
+          Real *const tmp0 = tmp00 + iz * NPNP;
+          Real *const tmp10 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_THREAD));
+          Real *const tmp1 = tmp10 + iz * NPNP;
+
+          Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_NPNP));
+          if (iz == 0) dvv[ix * NP + iy] = dvv_view(ix,iy);
+
+          const Real *const dp3dn0 = &dp3d_view(ie,n0,ix,iy,iz)[0];
+          const Real *const vn00 = &v_view(ie,n0,0,ix,iy,iz)[0];
+          const Real *const vn01 = &v_view(ie,n0,1,ix,iy,iz)[0];
+
+          const Real metdet = metdet_view(ie,ix,iy);
+          const Real dinv00 = dinv_view(ie,0,0,ix,iy) * metdet;
+          const Real dinv01 = dinv_view(ie,0,1,ix,iy) * metdet;
+          const Real dinv10 = dinv_view(ie,1,0,ix,iy) * metdet;
+          const Real dinv11 = dinv_view(ie,1,1,ix,iy) * metdet;
+          const Real rrdmd = (1.0 / metdet) * rrearth;
+
+          Real *const div_vdp = &div_vdp_view(ie,ix,iy,iz)[0];
+          Real *const vdp0 = &vdp_view(ie,0,ix,iy,iz)[0];
+          Real *const vdp1 = &vdp_view(ie,1,ix,iy,iz)[0];
+
+          for (int k = 0; k < LEV_PER_THREAD; k++) {
+
+            const int dz = k * WARP_SIZE;
+
+            vdp0[dz] = vn00[dz] * dp3dn0[dz];
+            vdp1[dz] = vn01[dz] * dp3dn0[dz];
+            tmp0[ix * NP + iy] = dinv00 * vdp0[dz] + dinv10 * vdp1[dz];
+            tmp1[ix * NP + iy] = dinv01 * vdp0[dz] + dinv11 * vdp1[dz];
+            team.team_barrier();
+
+            Real dudv = 0;
+            for (int j = 0; j < NP; j++) {
+              dudv += dvv[iy * NP + j] * tmp0[ix * NP + j] + dvv[ix * NP + j] * tmp1[j * NP + iy];
+            }
+            div_vdp[dz] = dudv * rrdmd;
+            team.team_barrier();
+          }
+        });
+    }
     int nerr;
     Kokkos::parallel_reduce("caar loop pre-boundary exchange", m_policy_pre, *this, nerr);
     Kokkos::fence();
-#ifdef PRINT_TREY
+#if 1
+    printf("TREY %s %s\n", __DATE__, __TIME__);
     fflush(stdout);
     exit(0);
 #endif
@@ -374,10 +463,28 @@ struct CaarFunctorImpl {
     KernelVariables kv(team, m_tu);
 
     // =========== EPOCH 1 =========== //
-    compute_div_vdp(kv);
+    //compute_div_vdp(kv);
 
     // =========== EPOCH 2 =========== //
     kv.team_barrier();
+#if 0
+    kv.team_barrier();
+    Kokkos::parallel_for(
+      Kokkos::TeamThreadRange(kv.team,NP*NP),
+      [&](const int idx) {
+        const int igp = idx / NP;
+        const int jgp = idx % NP;
+        Kokkos::parallel_for(
+          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
+          [&](const int ilev) {
+            printf("TREY %d %d %d %d vdp %g %g div_vdp %g\n",
+                   kv.ie,igp,jgp,ilev,
+                   m_buffers.vdp(kv.ie,0,igp,jgp,ilev)[0],
+                   m_buffers.vdp(kv.ie,1,igp,jgp,ilev)[0],
+                   m_buffers.div_vdp(kv.ie,igp,jgp,ilev)[0]);
+          });
+      });
+#endif
 
     // Computes pi, omega, and phi.
     const bool ok = compute_scan_quantities(kv);
@@ -422,7 +529,7 @@ struct CaarFunctorImpl {
     kv.team_barrier();
     compute_v_np1(kv);
 
-#ifdef PRINT_TREY
+#if 1
     kv.team_barrier();
     Kokkos::parallel_for(
       Kokkos::TeamThreadRange(kv.team,NP*NP),
