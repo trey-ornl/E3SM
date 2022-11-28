@@ -458,19 +458,22 @@ struct CaarFunctorImpl {
           Real *const pnh_buf = &pnh_view(ie,ix,iy,0)[0];
 
           for (int k = 0; k < LEV_PER_THREAD; k++) {
+
             const int iz = dz + k * WARP_SIZE;
             const Real pi_im1 = iz ? ptmp0[iz-1] : 0;
             const Real pi = 0.5 * (pi_im1 + ptmp0[iz]);
             ttmp0[ix * NP + iy] = pi;
+
             team.team_barrier();
-            Real v0 = 0;
-            Real v1 = 0;
+
+            Real d0 = 0;
+            Real d1 = 0;
             for (int j = 0; j < NP; j++) { 
-              v0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
-              v1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
+              d0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
+              d1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
             }
-            const Real g0 = rrdmd * (dinv00 * v0 + dinv01 * v1);
-            const Real g1 = rrdmd * (dinv10 * v0 + dinv11 * v1);
+            const Real g0 = rrdmd * (dinv00 * d0 + dinv01 * d1);
+            const Real g1 = rrdmd * (dinv10 * d0 + dinv11 * d1);
             const Real omega_ip1 = (iz+1 < NUM_LEV) ? ptmp1[iz+1] : 0;
             Real omega = -0.5 * (omega_ip1 + ptmp1[iz]);
             omega += vn00[iz] * g0 + vn01[iz] * g1;
@@ -484,6 +487,22 @@ struct CaarFunctorImpl {
             pnh = pow(pnh, 1.0 / (1.0 - PhysicalConstants::kappa));
             pnh *= PhysicalConstants::p0;
             exner = pnh / exner;
+
+            const Real dp0 = dp3dn0[iz];
+            const Real dp1 = dp3dn0[iz+1];
+            const Real dpi = (iz < NUM_LEV-1) ? 0.5 * (dp0 + dp1) : dp1;
+            const Real div2dpi = 1.0 / (2.0 * dpi);
+
+            const Real u0 = vn00[iz];
+            const Real u1 = vn00[iz+1];
+            const Real ui = (iz < NUM_LEV-1) ? div2dpi * (u0 * dp0 + u1 * dp1) : u0;
+
+            const Real v0 = vn01[iz];
+            const Real v1 = vn01[iz+1];
+            const Real vi = (iz < NUM_LEV-1) ? div2dpi * (v0 * dp0 + v1 * dp1) : v0;
+
+            if (iz == 0) printf("TREY %d %d %d %d dpi ui vi new %g %g %g\n",ie,ix,iy,iz,dp0,u0,v0);
+            printf("TREY %d %d %d %d dpi ui vi new %g %g %g\n",ie,ix,iy,iz+1,dpi,ui,vi);
 
             omega_buf[iz] = omega;
             exner_buf[iz] = exner;
@@ -565,6 +584,25 @@ struct CaarFunctorImpl {
       // ============ EPOCH 2.1 =========== //
       kv.team_barrier();
       compute_interface_quantities(kv);
+#if 1
+      kv.team_barrier();
+      Kokkos::parallel_for(
+        Kokkos::TeamThreadRange(kv.team,NP*NP),
+        [&](const int idx) {
+          const int igp = idx / NP;
+          const int jgp = idx % NP;
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(kv.team,NUM_INTERFACE_LEV),
+            [&](const int ilev) {
+              printf("TREY %d %d %d %d dpi ui vi old %g %g %g\n",
+                     kv.ie,igp,jgp,ilev,
+                     m_buffers.dp_i(kv.ie,igp,jgp,ilev)[0],
+                     m_buffers.v_i(kv.ie,0,igp,jgp,ilev)[0],
+                     m_buffers.v_i(kv.ie,1,igp,jgp,ilev)[0]);
+            });
+        });
+#endif
+
     }
 
     if (m_rsplit==0) {
@@ -600,7 +638,7 @@ struct CaarFunctorImpl {
     kv.team_barrier();
     compute_v_np1(kv);
 
-#if 1
+#if 0
     kv.team_barrier();
     Kokkos::parallel_for(
       Kokkos::TeamThreadRange(kv.team,NP*NP),
