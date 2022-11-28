@@ -364,7 +364,9 @@ struct CaarFunctorImpl {
       const Real rrearth = m_sphere_ops.m_rrearth;
 
       auto &dp3d_view = m_state.m_dp3d;
+      auto &phinh_i_view = m_state.m_phinh_i;
       auto &v_view = m_state.m_v;
+      auto &vtheta_dp_view = m_state.m_vtheta_dp;
 
       Kokkos::parallel_for(
         "caar loop pre-boundary exchange lambda",
@@ -444,6 +446,10 @@ struct CaarFunctorImpl {
             });
 
           team.team_barrier();
+
+          const Real *const vtheta_dp = &vtheta_dp_view(ie,n0,ix,iy,0)[0];
+          const Real *const phinh_i = &phinh_i_view(ie,n0,ix,iy,0)[0];
+
           for (int k = 0; k < LEV_PER_THREAD; k++) {
             const int iz = dz + k * WARP_SIZE;
             const Real pi_im1 = iz ? ptmp0[iz-1] : 0;
@@ -462,7 +468,17 @@ struct CaarFunctorImpl {
             Real omega = -0.5 * (omega_ip1 + ptmp1[iz]);
             omega += vn00[iz] * g0 + vn01[iz] * g1;
 
-            printf("TREY %d %d %d %d omega new %g\n",ie,ix,iy,iz,omega);
+            const Real phi = 0.5*(phinh_i[iz+1] + phinh_i[iz]);
+            Real exner = phinh_i[iz+1] - phinh_i[iz];
+            const Real vdpiz = vtheta_dp[iz];
+            if ((vdpiz < 0) || (exner > 0)) abort();
+            exner = -PhysicalConstants::Rgas * vdpiz / exner;
+            Real pnh = exner/PhysicalConstants::p0;
+            pnh = pow(pnh, 1.0 / (1.0 - PhysicalConstants::kappa));
+            pnh *= PhysicalConstants::p0;
+            exner = pnh / exner;
+
+            printf("TREY %d %d %d %d omega exner pnh phi new %g %g %g %g\n",ie,ix,iy,iz,omega,exner,pnh,phi);
           }
         });
     }
@@ -525,9 +541,12 @@ struct CaarFunctorImpl {
         Kokkos::parallel_for(
           Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d omega old %g\n",
+            printf("TREY %d %d %d %d omega exner pnh phi old %g %g %g %g\n",
                    kv.ie,igp,jgp,ilev,
-                   m_buffers.omega_p(kv.ie,igp,jgp,ilev)[0]);
+                   m_buffers.omega_p(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.exner(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.pnh(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.phi(kv.ie,igp,jgp,ilev)[0]);
           });
       });
 #endif
