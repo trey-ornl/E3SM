@@ -360,6 +360,11 @@ struct CaarFunctorImpl {
       auto &v_i_view = m_buffers.v_i;
       auto &vdp_view = m_buffers.vdp;
 
+      const Real eta_ave_w = m_data.eta_ave_w;
+
+      auto &derived_omega_p_view = m_derived.m_omega_p;
+      auto &derived_vn0_view = m_derived.m_vn0;
+
       const int n0 = m_data.n0;
 
       const Real pi_i0 = m_hvcoord.ps0*m_hvcoord.hybrid_ai0;
@@ -415,14 +420,21 @@ struct CaarFunctorImpl {
           Real *const vdp1 = &vdp_view(ie,1,ix,iy,0)[0];
           const Real *const dp3dn0 = &dp3d_view(ie,n0,ix,iy,0)[0];
 
+          Real *const derived_vn00 = &derived_vn0_view(ie,0,ix,iy,0)[0];
+          Real *const derived_vn01 = &derived_vn0_view(ie,1,ix,iy,0)[0];
+
           for (int k = 0; k < LEV_PER_THREAD; k++) {
 
             const int iz = dz + k * WARP_SIZE;
 
             vdp0[iz] = vn00[iz] * dp3dn0[iz];
+            derived_vn00[iz] += eta_ave_w * vdp0[iz];
             vdp1[iz] = vn01[iz] * dp3dn0[iz];
+            derived_vn01[iz] += eta_ave_w * vdp1[iz];
+
             ttmp0[ix * NP + iy] = dinv00 * vdp0[iz] + dinv10 * vdp1[iz];
             ttmp1[ix * NP + iy] = dinv01 * vdp0[iz] + dinv11 * vdp1[iz];
+
             team.team_barrier();
 
             Real dudv = 0;
@@ -430,6 +442,8 @@ struct CaarFunctorImpl {
               dudv += dvv[iy * NP + j] * ttmp0[ix * NP + j] + dvv[ix * NP + j] * ttmp1[j * NP + iy];
             }
             div_vdp[iz] = dudv * rrdmd;
+
+            team.team_barrier();
           }
 
           Real *const ptmp00 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_POINT));
@@ -447,14 +461,16 @@ struct CaarFunctorImpl {
           Kokkos::parallel_scan(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz, Real &sum, const bool last) {
-              if (last) ptmp1[iz] = sum;
               sum += div_vdp[iz];
+              if (last) ptmp1[iz] = sum;
             });
 
           team.team_barrier();
 
           const Real *const vtheta_dp = &vtheta_dp_view(ie,n0,ix,iy,0)[0];
           const Real *const phinh_i = &phinh_i_view(ie,n0,ix,iy,0)[0];
+
+          Real *const derived_omega_p = &derived_omega_p_view(ie,ix,iy,0)[0];
 
           Real *const omega_buf = &omega_p_view(ie,ix,iy,0)[0];
           Real *const exner_buf = &exner_view(ie,ix,iy,0)[0];
@@ -477,9 +493,10 @@ struct CaarFunctorImpl {
             }
             const Real g0 = rrdmd * (dinv00 * d0 + dinv01 * d1);
             const Real g1 = rrdmd * (dinv10 * d0 + dinv11 * d1);
-            const Real omega_ip1 = (iz+1 < NUM_LEV) ? ptmp1[iz+1] : 0;
-            Real omega = -0.5 * (omega_ip1 + ptmp1[iz]);
+            const Real omega_im1 = (iz > 0) ? ptmp1[iz-1] : 0;
+            Real omega = -0.5 * (omega_im1 + ptmp1[iz]);
             omega += vn00[iz] * g0 + vn01[iz] * g1;
+            derived_omega_p[iz] += eta_ave_w * omega;
 
             const Real phi = 0.5*(phinh_i[iz+1] + phinh_i[iz]);
             Real exner = phinh_i[iz+1] - phinh_i[iz];
@@ -496,9 +513,10 @@ struct CaarFunctorImpl {
             omega_buf[iz] = omega;
             exner_buf[iz] = exner;
             pnh_buf[iz] = pnh;
+
+            team.team_barrier();
           }
 
-          team.team_barrier();
 
           Real *const dp_i = &dp_i_view(ie,ix,iy,0)[0];
           Real *const u_i = &v_i_view(ie,0,ix,iy,0)[0];
@@ -645,8 +663,27 @@ struct CaarFunctorImpl {
 
     // ============= EPOCH 3 ============== //
     kv.team_barrier();
-    compute_accumulated_quantities(kv);
+    //compute_accumulated_quantities(kv);
 
+#if 0
+      kv.team_barrier();
+      Kokkos::parallel_for(
+        Kokkos::TeamThreadRange(kv.team,NP*NP),
+        [&](const int idx) {
+          const int igp = idx / NP;
+          const int jgp = idx % NP;
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
+            [&](const int ilev) {
+              printf("TREY %d %d %d %d omega_p omega_p+ vn0 %g %g %g %g\n",
+                     kv.ie,igp,jgp,ilev,
+                     m_buffers.omega_p(kv.ie,igp,jgp,ilev)[0],
+                     m_derived.m_omega_p(kv.ie,igp,jgp,ilev)[0],
+                     m_derived.m_vn0(kv.ie,0,igp,jgp,ilev)[0],
+                     m_derived.m_vn0(kv.ie,1,igp,jgp,ilev)[0]);
+            });
+        });
+#endif
     // Compute update quantities
     if (!m_theta_hydrostatic_mode) {
       compute_w_and_phi_tens (kv);
