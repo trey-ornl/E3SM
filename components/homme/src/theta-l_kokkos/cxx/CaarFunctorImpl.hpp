@@ -352,9 +352,12 @@ struct CaarFunctorImpl {
       using Team = TeamPolicy::member_type;
 
       auto &div_vdp_view = m_buffers.div_vdp;
+      auto &dp_i_view = m_buffers.dp_i;
+      auto &dpnh_dp_i_view = m_buffers.dpnh_dp_i;
       auto &exner_view = m_buffers.exner;
       auto &omega_p_view = m_buffers.omega_p;
       auto &pnh_view = m_buffers.pnh;
+      auto &v_i_view = m_buffers.v_i;
       auto &vdp_view = m_buffers.vdp;
 
       const int n0 = m_data.n0;
@@ -458,8 +461,8 @@ struct CaarFunctorImpl {
           Real *const pnh_buf = &pnh_view(ie,ix,iy,0)[0];
 
           for (int k = 0; k < LEV_PER_THREAD; k++) {
-
             const int iz = dz + k * WARP_SIZE;
+
             const Real pi_im1 = iz ? ptmp0[iz-1] : 0;
             const Real pi = 0.5 * (pi_im1 + ptmp0[iz]);
             ttmp0[ix * NP + iy] = pi;
@@ -488,26 +491,52 @@ struct CaarFunctorImpl {
             pnh *= PhysicalConstants::p0;
             exner = pnh / exner;
 
-            const Real dp0 = dp3dn0[iz];
-            const Real dp1 = dp3dn0[iz+1];
-            const Real dpi = (iz < NUM_LEV-1) ? 0.5 * (dp0 + dp1) : dp1;
-            const Real div2dpi = 1.0 / (2.0 * dpi);
-
-            const Real u0 = vn00[iz];
-            const Real u1 = vn00[iz+1];
-            const Real ui = (iz < NUM_LEV-1) ? div2dpi * (u0 * dp0 + u1 * dp1) : u0;
-
-            const Real v0 = vn01[iz];
-            const Real v1 = vn01[iz+1];
-            const Real vi = (iz < NUM_LEV-1) ? div2dpi * (v0 * dp0 + v1 * dp1) : v0;
-
-            if (iz == 0) printf("TREY %d %d %d %d dpi ui vi new %g %g %g\n",ie,ix,iy,iz,dp0,u0,v0);
-            printf("TREY %d %d %d %d dpi ui vi new %g %g %g\n",ie,ix,iy,iz+1,dpi,ui,vi);
+            ptmp0[iz] = pnh;
 
             omega_buf[iz] = omega;
             exner_buf[iz] = exner;
             pnh_buf[iz] = pnh;
           }
+
+          team.team_barrier();
+
+          Real *const dp_i = &dp_i_view(ie,ix,iy,0)[0];
+          Real *const u_i = &v_i_view(ie,0,ix,iy,0)[0];
+          Real *const v_i = &v_i_view(ie,1,ix,iy,0)[0];
+          Real *const dpnh_dp_i = &dpnh_dp_i_view(ie,ix,iy,0)[0];
+
+          for (int k = 0; k < LEV_PER_THREAD; k++) {
+            const int iz = dz + k * WARP_SIZE;
+
+            const Real dp0 = dp3dn0[iz];
+            const Real dp1 = dp3dn0[iz+1];
+            const Real dpi = (iz < NUM_LEV-1) ? 0.5 * (dp0 + dp1) : dp1;
+            if (iz == 0) dp_i[0] = dp0; 
+            dp_i[iz+1] = dpi;
+            const Real div2dpi = 1.0 / (2.0 * dpi);
+
+            const Real u0 = vn00[iz];
+            const Real u1 = vn00[iz+1];
+            const Real ui = (iz < NUM_LEV-1) ? div2dpi * (u0 * dp0 + u1 * dp1) : u0;
+            if (iz == 0) u_i[0] = u0;
+            u_i[iz+1] = ui;
+
+            const Real v0 = vn01[iz];
+            const Real v1 = vn01[iz+1];
+            const Real vi = (iz < NUM_LEV-1) ? div2dpi * (v0 * dp0 + v1 * dp1) : v0;
+            if (iz == 0) v_i[0] = v0;
+            v_i[iz+1] = vi;
+
+            const Real pnh0 = ptmp0[iz];
+            const Real pnh1 = ptmp0[iz+1];
+            Real dpnhi = (iz < NUM_LEV-1) ? (pnh1 - pnh0) : dpi;
+            dpnhi *= 2.0 * div2dpi;
+            dpnh_dp_i[iz+1] = dpnhi;
+
+            const Real dpnhi0 = 4.0 * div2dpi * (pnh0 - pi_i0);
+            if (iz == 0) dpnh_dp_i[0] = dpnhi0;
+          }
+
         });
     }
 
@@ -580,11 +609,15 @@ struct CaarFunctorImpl {
     if ( ! ok) nerr = 1;
 #endif
 
+#if 0
     if (m_rsplit==0 || !m_theta_hydrostatic_mode) {
       // ============ EPOCH 2.1 =========== //
       kv.team_barrier();
       compute_interface_quantities(kv);
-#if 1
+    }
+#endif
+
+#if 0
       kv.team_barrier();
       Kokkos::parallel_for(
         Kokkos::TeamThreadRange(kv.team,NP*NP),
@@ -594,16 +627,15 @@ struct CaarFunctorImpl {
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(kv.team,NUM_INTERFACE_LEV),
             [&](const int ilev) {
-              printf("TREY %d %d %d %d dpi ui vi old %g %g %g\n",
+              printf("TREY %d %d %d %d dpi ui vi dpnhi old %g %g %g %g\n",
                      kv.ie,igp,jgp,ilev,
                      m_buffers.dp_i(kv.ie,igp,jgp,ilev)[0],
                      m_buffers.v_i(kv.ie,0,igp,jgp,ilev)[0],
-                     m_buffers.v_i(kv.ie,1,igp,jgp,ilev)[0]);
+                     m_buffers.v_i(kv.ie,1,igp,jgp,ilev)[0],
+                     m_buffers.dpnh_dp_i(kv.ie,igp,jgp,ilev)[0]);
             });
         });
 #endif
-
-    }
 
     if (m_rsplit==0) {
       // ============= EPOCH 2.2 ============ //
@@ -638,7 +670,7 @@ struct CaarFunctorImpl {
     kv.team_barrier();
     compute_v_np1(kv);
 
-#if 0
+#if 1
     kv.team_barrier();
     Kokkos::parallel_for(
       Kokkos::TeamThreadRange(kv.team,NP*NP),
