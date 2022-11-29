@@ -361,13 +361,19 @@ struct CaarFunctorImpl {
       auto &vdp_view = m_buffers.vdp;
 
       const Real eta_ave_w = m_data.eta_ave_w;
+      const int n0 = m_data.n0;
+      const Real scale1 = m_data.scale1;
+      const Real gscale1 = scale1 * PhysicalConstants::g;
+      const Real gscale2 = m_data.scale2 * PhysicalConstants::g;
+      const Real dscale = m_data.scale1 - m_data.scale2;
 
       auto &derived_omega_p_view = m_derived.m_omega_p;
       auto &derived_vn0_view = m_derived.m_vn0;
 
-      const int n0 = m_data.n0;
+      auto &gradphis_view = m_geometry.m_gradphis;
 
       const Real pi_i0 = m_hvcoord.ps0*m_hvcoord.hybrid_ai0;
+      const Real *const hybrid_bi_packed = reinterpret_cast<const Real *>(m_hvcoord.hybrid_bi_packed.data());
 
       const auto &dvv_view = m_sphere_ops.dvv;
       const auto &dinv_view = m_sphere_ops.m_dinv;
@@ -378,6 +384,7 @@ struct CaarFunctorImpl {
       auto &phinh_i_view = m_state.m_phinh_i;
       auto &v_view = m_state.m_v;
       auto &vtheta_dp_view = m_state.m_vtheta_dp;
+      auto &w_i_view = m_state.m_w_i;
 
       Kokkos::parallel_for(
         "caar loop pre-boundary exchange lambda",
@@ -517,7 +524,6 @@ struct CaarFunctorImpl {
             team.team_barrier();
           }
 
-
           Real *const dp_i = &dp_i_view(ie,ix,iy,0)[0];
           Real *const u_i = &v_i_view(ie,0,ix,iy,0)[0];
           Real *const v_i = &v_i_view(ie,1,ix,iy,0)[0];
@@ -555,6 +561,47 @@ struct CaarFunctorImpl {
             if (iz == 0) dpnh_dp_i[0] = dpnhi0;
           }
 
+          team.team_barrier();
+
+          const Real *const phinh_ie = &phinh_i_view(ie,n0,0,0,0)[0];
+          const Real *const w_ie = &w_i_view(ie,n0,0,0,0)[0];
+          const Real gradphis0 = gradphis_view(ie,0,ix,iy);
+          const Real gradphis1 = gradphis_view(ie,1,ix,iy);
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV_P),
+            [&](const int iz) {
+              Real dphi0 = 0;
+              Real dphi1 = 0;
+              Real dw0 = 0;
+              Real dw1 = 0;
+              for (int j = 0; j < NP; j++) {
+
+                const Real dvvyj = dvv[iy * NP + j];
+                const int ixjz = (ix * NP + j) * NUM_LEV_P + iz;
+                dphi0 += dvvyj * phinh_ie[ixjz];
+                dw0 += dvvyj * w_ie[ixjz];
+
+                const Real dvvxj = dvv[ix * NP + j];
+                const int ijyz = (j * NP + iy) * NUM_LEV_P + iz;
+                dphi1 += dvvxj * phinh_ie[ijyz];
+                dw1 += dvvxj * w_ie[ijyz];
+              }
+
+              const Real grad_w_i0 = rrdmd * (dinv00 * dw0 + dinv01 * dw1);
+              const Real grad_w_i1 = rrdmd * (dinv10 * dw0 + dinv11 * dw1);
+              Real w_tens = u_i[iz] * grad_w_i0 + v_i[iz] * grad_w_i1;
+              w_tens *= -scale1;
+              const Real scale = (iz == NUM_LEV) ? gscale1 : gscale2;
+              w_tens += (dpnh_dp_i[iz]-1.0) * scale;
+
+              const Real grad_phinh_i0 = rrdmd * (dinv00 * dphi0 + dinv01 * dphi1);
+              const Real grad_phinh_i1 = rrdmd * (dinv10 * dphi0 + dinv11 * dphi1);
+              Real phi_tens = u_i[iz] * grad_phinh_i0 + v_i[iz] * grad_phinh_i1;
+              phi_tens *= -scale1;
+              phi_tens += w_ie[iz] * gscale2;
+              phi_tens += dscale * (u_i[iz] *  gradphis0 + v_i[iz] * gradphis1) * hybrid_bi_packed[iz];
+              printf("TREY %d %d %d %d w_tens phi_tens new %g %g\n",ie,ix,iy,iz,w_tens,phi_tens);
+            });
         });
     }
 
@@ -707,7 +754,7 @@ struct CaarFunctorImpl {
     kv.team_barrier();
     compute_v_np1(kv);
 
-#if 1
+#if 0
     kv.team_barrier();
     Kokkos::parallel_for(
       Kokkos::TeamThreadRange(kv.team,NP*NP),
@@ -1307,6 +1354,7 @@ struct CaarFunctorImpl {
                 (v_i(0,igp,jgp,ilev)*m_geometry.m_gradphis(kv.ie,0,igp,jgp) +
                  v_i(1,igp,jgp,ilev)*m_geometry.m_gradphis(kv.ie,1,igp,jgp) ) * m_hvcoord.hybrid_bi_packed(ilev);
         }
+        printf("TREY %d %d %d %d w_tens phi_tens old %g %g\n",kv.ie,igp,jgp,ilev,w_tens(ilev)[0],phi_tens(ilev)[0]);
       });
     });
   }
