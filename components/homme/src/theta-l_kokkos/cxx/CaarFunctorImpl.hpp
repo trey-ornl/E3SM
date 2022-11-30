@@ -351,6 +351,13 @@ struct CaarFunctorImpl {
       using Team = TeamPolicy::member_type;
 
       auto &buffers_div_vdp = m_buffers.div_vdp;
+      auto &buffers_exner = m_buffers.exner;
+      auto &buffers_grad_phinh_i = m_buffers.grad_phinh_i;
+      auto &buffers_grad_tmp = m_buffers.grad_tmp;
+      auto &buffers_omega_p = m_buffers.omega_p;
+      auto &buffers_phi = m_buffers.phi;
+      auto &buffers_pi = m_buffers.pi;
+      auto &buffers_pnh = m_buffers.pnh;
       auto &buffers_vdp = m_buffers.vdp;
 
       const int data_n0 = m_data.n0;
@@ -361,7 +368,13 @@ struct CaarFunctorImpl {
       const Real sphere_rrearth = m_sphere_ops.m_rrearth;
 
       auto &state_dp3d = m_state.m_dp3d;
+      auto &state_phinh_i = m_state.m_phinh_i;
       auto &state_v = m_state.m_v;
+      auto &state_vtheta_dp = m_state.m_vtheta_dp;
+
+      const Real div1mkappa = 1.0 / (1.0 - PhysicalConstants::kappa);
+      const Real divp0 = 1.0 / PhysicalConstants::p0;
+      const Real pi_i00 = m_hvcoord.ps0*m_hvcoord.hybrid_ai0;
 
       Kokkos::parallel_for(
         "caar loop pre-boundary exchange lambda",
@@ -427,6 +440,75 @@ struct CaarFunctorImpl {
 
               team.team_barrier();
             });
+
+          Real *const pi_i = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
+          Kokkos::parallel_scan(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz, Real &sum, const bool last) {
+              if (iz == 0) pi_i[0] = sum = pi_i00;
+              sum += dp3d0[iz];
+              if (last) pi_i[iz+1] = sum;
+            });
+
+          Real *const omega_i = &buffers_grad_phinh_i(ie,0,ix,iy,0)[0];
+          Kokkos::parallel_scan(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz, Real &sum, const bool last) {
+              if (iz == 0) omega_i[0] = 0;
+              sum += div_vdp[iz];
+              if (last) omega_i[iz+1] = sum;
+            });
+
+          Real *const omega_p = &buffers_omega_p(ie,ix,iy,0)[0];
+          Real *const pi = &buffers_pi(ie,ix,iy,0)[0];
+          Real *const grad_tmp0 = &buffers_grad_tmp(ie,0,ix,iy,0)[0];
+          Real *const grad_tmp1 = &buffers_grad_tmp(ie,1,ix,iy,0)[0];
+
+          Real *const exner = &buffers_exner(ie,ix,iy,0)[0];
+          Real *const phi = &buffers_phi(ie,ix,iy,0)[0];
+          Real *const pnh = &buffers_pnh(ie,ix,iy,0)[0];
+
+          const Real *const vtheta_dp0 = &state_vtheta_dp(ie,data_n0,ix,iy,0)[0];
+          const Real *const phinh_i0 = &state_phinh_i(ie,data_n0,ix,iy,0)[0];
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
+
+              omega_p[iz] = -0.5 * (omega_i[iz] + omega_i[iz+1]);
+              pi[iz] = 0.5 * (pi_i[iz] + pi_i[iz+1]);
+              ttmp0[ix * NP + iy] = pi[iz];
+
+              team.team_barrier();
+
+              Real dpi0 = 0;
+              Real dpi1 = 0;
+              for (int j = 0; j < NP; j++) {
+                dpi0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
+                dpi1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
+              }
+              dpi0 *= sphere_rrearth;
+              dpi1 *= sphere_rrearth;
+              grad_tmp0[iz] = dinv00 * dpi0 + dinv01 * dpi1;
+              grad_tmp1[iz] = dinv10 * dpi0 + dinv11 * dpi1;
+
+              omega_p[iz] += v00[iz] * grad_tmp0[iz] + v01[iz] * grad_tmp1[iz];
+
+              phi[iz] = 0.5 * (phinh_i0[iz+1] + phinh_i0[iz]);
+              const Real dphi = phinh_i0[iz+1] - phinh_i0[iz];
+              if ((vtheta_dp0[iz] < 0) || (dphi > 0)) abort();
+
+              Real exneriz = -PhysicalConstants::Rgas * vtheta_dp0[iz] / dphi;
+              Real pnhiz = exneriz * divp0;
+              pnhiz = pow(pnhiz, div1mkappa);
+              pnhiz *= PhysicalConstants::p0;
+              exneriz = pnhiz / exneriz;
+
+              pnh[iz] = pnhiz;
+              exner[iz] = exner[iz];
+
+              team.team_barrier();
+            });
        });
     }
 
@@ -472,6 +554,12 @@ struct CaarFunctorImpl {
 #if 0
     // =========== EPOCH 1 =========== //
     compute_div_vdp(kv);
+
+    // =========== EPOCH 2 =========== //
+    kv.team_barrier();
+    // Computes pi, omega, and phi.
+    const bool ok = compute_scan_quantities(kv);
+    if ( ! ok) nerr = 1;
 #endif
 
 #if 0
@@ -484,20 +572,16 @@ struct CaarFunctorImpl {
         Kokkos::parallel_for(
           Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d vdp div_vdp %g %g %g\n",
+            printf("TREY %d %d %d %d omega pi pnh exner phi %g %g %g %g %g\n",
                    kv.ie,igp,jgp,ilev,
-                   m_buffers.vdp(kv.ie,0,igp,jgp,ilev)[0],
-                   m_buffers.vdp(kv.ie,1,igp,jgp,ilev)[0],
-                   m_buffers.div_vdp(kv.ie,igp,jgp,ilev)[0]);
+                   m_buffers.omega_p(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.pi(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.pnh(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.exner(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.phi(kv.ie,igp,jgp,ilev)[0]);
           });
       });
 #endif
-    // =========== EPOCH 2 =========== //
-    kv.team_barrier();
-    // Computes pi, omega, and phi.
-    const bool ok = compute_scan_quantities(kv);
-    if ( ! ok) nerr = 1;
-
     if (m_rsplit==0 || !m_theta_hydrostatic_mode) {
       // ============ EPOCH 2.1 =========== //
       kv.team_barrier();
