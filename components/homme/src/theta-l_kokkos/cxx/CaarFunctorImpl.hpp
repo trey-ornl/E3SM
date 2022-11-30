@@ -363,7 +363,11 @@ struct CaarFunctorImpl {
       auto &buffers_v_i = m_buffers.v_i;
       auto &buffers_vdp = m_buffers.vdp;
 
+      const Real data_eta_ave_w = m_data.eta_ave_w;
       const int data_n0 = m_data.n0;
+
+      auto &derived_omega_p = m_derived.m_omega_p;
+      auto &derived_vn0 = m_derived.m_vn0;
 
       auto &sphere_dinv = m_sphere_ops.m_dinv;
       auto &sphere_dvv = m_sphere_ops.dvv;
@@ -424,6 +428,9 @@ struct CaarFunctorImpl {
           Real *const vdp1 = &buffers_vdp(ie,1,ix,iy,0)[0];
           Real *const dp_i = &buffers_dp_i(ie,ix,iy,0)[0];
 
+          Real *const dvn00 = &derived_vn0(ie,0,ix,iy,0)[0];
+          Real *const dvn01 = &derived_vn0(ie,1,ix,iy,0)[0];
+
           dp_i[0] = dp3d0[0];
           dp_i[NUM_LEV] = dp3d0[NUM_LEV-1];
 
@@ -434,7 +441,10 @@ struct CaarFunctorImpl {
               if (iz > 0) dp_i[iz] = 0.5 * (dp3d0[iz-1] + dp3d0[iz]);
 
               vdp0[iz] = v00[iz] * dp3d0[iz];
+              dvn00[iz] += data_eta_ave_w * vdp0[iz];
+
               vdp1[iz] = v01[iz] * dp3d0[iz];
+              dvn01[iz] += data_eta_ave_w * vdp1[iz];
 
               ttmp0[ix * NP + iy] = (dinv00 * vdp0[iz] + dinv10 * vdp1[iz]) * metdet;
               ttmp1[ix * NP + iy] = (dinv01 * vdp0[iz] + dinv11 * vdp1[iz]) * metdet;
@@ -483,6 +493,7 @@ struct CaarFunctorImpl {
           Real *const v_i0 = &buffers_v_i(ie,0,ix,iy,0)[0];
           Real *const v_i1 = &buffers_v_i(ie,1,ix,iy,0)[0];
 
+          Real *const domega_p = &derived_omega_p(ie,ix,iy,0)[0];
           v_i0[0] = v00[0];
           v_i1[0] = v01[0];
 
@@ -517,6 +528,7 @@ struct CaarFunctorImpl {
               grad_tmp1[iz] = dinv10 * dpi0 + dinv11 * dpi1;
 
               omega_p[iz] += v00[iz] * grad_tmp0[iz] + v01[iz] * grad_tmp1[iz];
+              domega_p[iz] += data_eta_ave_w * omega_p[iz];
 
               phi[iz] = 0.5 * (phinh_i0[iz+1] + phinh_i0[iz]);
               const Real dphi = phinh_i0[iz+1] - phinh_i0[iz];
@@ -606,26 +618,6 @@ struct CaarFunctorImpl {
       compute_interface_quantities(kv);
     }
 
-#endif
-#if 0
-    kv.team_barrier();
-    Kokkos::parallel_for(
-      Kokkos::TeamThreadRange(kv.team,NP*NP),
-      [&](const int idx) {
-        const int igp = idx / NP;
-        const int jgp = idx % NP;
-        Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team,NUM_LEV_P),
-          [&](const int ilev) {
-            printf("TREY %d %d %d %d dp_i v_i dpnh_dp_i %g %g %g %g\n",
-                   kv.ie,igp,jgp,ilev,
-                   m_buffers.dp_i(kv.ie,igp,jgp,ilev)[0],
-                   m_buffers.v_i(kv.ie,0,igp,jgp,ilev)[0],
-                   m_buffers.v_i(kv.ie,1,igp,jgp,ilev)[0],
-                   m_buffers.dpnh_dp_i(kv.ie,igp,jgp,ilev)[0]);
-          });
-      });
-#endif
     if (m_rsplit==0) {
       // ============= EPOCH 2.2 ============ //
       kv.team_barrier();
@@ -635,7 +627,26 @@ struct CaarFunctorImpl {
     // ============= EPOCH 3 ============== //
     kv.team_barrier();
     compute_accumulated_quantities(kv);
+#endif
 
+#if 0
+    kv.team_barrier();
+    Kokkos::parallel_for(
+      Kokkos::TeamThreadRange(kv.team,NP*NP),
+      [&](const int idx) {
+        const int igp = idx / NP;
+        const int jgp = idx % NP;
+        Kokkos::parallel_for(
+          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
+          [&](const int ilev) {
+            printf("TREY %d %d %d %d omega_p vn0 %g %g %g \n",
+                   kv.ie,igp,jgp,ilev,
+                   m_derived.m_omega_p(kv.ie,igp,jgp,ilev)[0],
+                   m_derived.m_vn0(kv.ie,0,igp,jgp,ilev)[0],
+                   m_derived.m_vn0(kv.ie,1,igp,jgp,ilev)[0]);
+          });
+      });
+#endif
     // Compute update quantities
     if (!m_theta_hydrostatic_mode) {
       compute_w_and_phi_tens (kv);
