@@ -351,6 +351,8 @@ struct CaarFunctorImpl {
       using Team = TeamPolicy::member_type;
 
       auto &buffers_div_vdp = m_buffers.div_vdp;
+      auto &buffers_dp_i = m_buffers.dp_i;
+      auto &buffers_dpnh_dp_i = m_buffers.dpnh_dp_i;
       auto &buffers_exner = m_buffers.exner;
       auto &buffers_grad_phinh_i = m_buffers.grad_phinh_i;
       auto &buffers_grad_tmp = m_buffers.grad_tmp;
@@ -358,6 +360,7 @@ struct CaarFunctorImpl {
       auto &buffers_phi = m_buffers.phi;
       auto &buffers_pi = m_buffers.pi;
       auto &buffers_pnh = m_buffers.pnh;
+      auto &buffers_v_i = m_buffers.v_i;
       auto &buffers_vdp = m_buffers.vdp;
 
       const int data_n0 = m_data.n0;
@@ -419,10 +422,16 @@ struct CaarFunctorImpl {
           Real *const div_vdp = &buffers_div_vdp(ie,ix,iy,0)[0];
           Real *const vdp0 = &buffers_vdp(ie,0,ix,iy,0)[0];
           Real *const vdp1 = &buffers_vdp(ie,1,ix,iy,0)[0];
+          Real *const dp_i = &buffers_dp_i(ie,ix,iy,0)[0];
+
+          dp_i[0] = dp3d0[0];
+          dp_i[NUM_LEV] = dp3d0[NUM_LEV-1];
 
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&] (const int iz) {
+
+              if (iz > 0) dp_i[iz] = 0.5 * (dp3d0[iz-1] + dp3d0[iz]);
 
               vdp0[iz] = v00[iz] * dp3d0[iz];
               vdp1[iz] = v01[iz] * dp3d0[iz];
@@ -471,9 +480,24 @@ struct CaarFunctorImpl {
           const Real *const vtheta_dp0 = &state_vtheta_dp(ie,data_n0,ix,iy,0)[0];
           const Real *const phinh_i0 = &state_phinh_i(ie,data_n0,ix,iy,0)[0];
 
+          Real *const v_i0 = &buffers_v_i(ie,0,ix,iy,0)[0];
+          Real *const v_i1 = &buffers_v_i(ie,1,ix,iy,0)[0];
+
+          v_i0[0] = v00[0];
+          v_i1[0] = v01[0];
+
+          v_i0[NUM_LEV] = v00[NUM_LEV-1];
+          v_i1[NUM_LEV] = v01[NUM_LEV-1];
+
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz) {
+
+              if (iz > 0) {
+                const Real denom = 1.0 / (2.0 * dp_i[iz]);
+                v_i0[iz] = (dp3d0[iz] * v00[iz] + dp3d0[iz-1] * v00[iz-1]) * denom;
+                v_i1[iz] = (dp3d0[iz] * v01[iz] + dp3d0[iz-1] * v01[iz-1]) * denom;
+              }
 
               omega_p[iz] = -0.5 * (omega_i[iz] + omega_i[iz+1]);
               pi[iz] = 0.5 * (pi_i[iz] + pi_i[iz+1]);
@@ -509,6 +533,21 @@ struct CaarFunctorImpl {
 
               team.team_barrier();
             });
+
+          Real *const dpnh_dp_i = &buffers_dpnh_dp_i(ie,ix,iy,0)[0];
+
+          dpnh_dp_i[0] = 2.0 * (pnh[0] - pi_i00) / dp_i[0];
+          const Real pnh_last = pnh[NUM_LEV-1];
+          const Real dp_last = dp_i[NUM_LEV];
+          const Real pnh_i_last = pnh_last + 0.5 * dp_last;
+          dpnh_dp_i[NUM_LEV] = 2.0 * (pnh_i_last - pnh_last) / dp_last;
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
+              if (iz > 0) dpnh_dp_i[iz] = (pnh[iz] - pnh[iz-1]) / dp_i[iz];
+            });
+
        });
     }
 
@@ -560,8 +599,14 @@ struct CaarFunctorImpl {
     // Computes pi, omega, and phi.
     const bool ok = compute_scan_quantities(kv);
     if ( ! ok) nerr = 1;
-#endif
 
+    if (m_rsplit==0 || !m_theta_hydrostatic_mode) {
+      // ============ EPOCH 2.1 =========== //
+      kv.team_barrier();
+      compute_interface_quantities(kv);
+    }
+
+#endif
 #if 0
     kv.team_barrier();
     Kokkos::parallel_for(
@@ -570,24 +615,17 @@ struct CaarFunctorImpl {
         const int igp = idx / NP;
         const int jgp = idx % NP;
         Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
+          Kokkos::ThreadVectorRange(kv.team,NUM_LEV_P),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d omega pi pnh exner phi %g %g %g %g %g\n",
+            printf("TREY %d %d %d %d dp_i v_i dpnh_dp_i %g %g %g %g\n",
                    kv.ie,igp,jgp,ilev,
-                   m_buffers.omega_p(kv.ie,igp,jgp,ilev)[0],
-                   m_buffers.pi(kv.ie,igp,jgp,ilev)[0],
-                   m_buffers.pnh(kv.ie,igp,jgp,ilev)[0],
-                   m_buffers.exner(kv.ie,igp,jgp,ilev)[0],
-                   m_buffers.phi(kv.ie,igp,jgp,ilev)[0]);
+                   m_buffers.dp_i(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.v_i(kv.ie,0,igp,jgp,ilev)[0],
+                   m_buffers.v_i(kv.ie,1,igp,jgp,ilev)[0],
+                   m_buffers.dpnh_dp_i(kv.ie,igp,jgp,ilev)[0]);
           });
       });
 #endif
-    if (m_rsplit==0 || !m_theta_hydrostatic_mode) {
-      // ============ EPOCH 2.1 =========== //
-      kv.team_barrier();
-      compute_interface_quantities(kv);
-    }
-
     if (m_rsplit==0) {
       // ============= EPOCH 2.2 ============ //
       kv.team_barrier();
