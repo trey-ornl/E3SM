@@ -352,6 +352,7 @@ struct CaarFunctorImpl {
 
       auto &buffers_div_vdp = m_buffers.div_vdp;
       auto &buffers_dp_i = m_buffers.dp_i;
+      auto &buffers_dp_tens = m_buffers.dp_tens;
       auto &buffers_dpnh_dp_i = m_buffers.dpnh_dp_i;
       auto &buffers_exner = m_buffers.exner;
       auto &buffers_grad_phinh_i = m_buffers.grad_phinh_i;
@@ -362,6 +363,7 @@ struct CaarFunctorImpl {
       auto &buffers_phi_tens = m_buffers.phi_tens;
       auto &buffers_pi = m_buffers.pi;
       auto &buffers_pnh = m_buffers.pnh;
+      auto &buffers_theta_tens = m_buffers.theta_tens;
       auto &buffers_v_i = m_buffers.v_i;
       auto &buffers_vdp = m_buffers.vdp;
       auto &buffers_w_tens = m_buffers.w_tens;
@@ -625,6 +627,38 @@ struct CaarFunctorImpl {
               pt += dscale * (v_i0[iz] * gradphis0 + v_i1[iz] * gradphis1) * hvcoord_hybrid_bi_packed[iz];
               phi_tens[iz] = pt;
             });
+
+          Real *const dp_tens = &buffers_dp_tens(ie,ix,iy,0)[0];
+          Real *const theta_tens = &buffers_theta_tens(ie,ix,iy,0)[0];
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
+
+              ttmp0[ix * NP + iy] = vtheta_dp0[iz] / dp3d0[iz];
+
+              team.team_barrier();
+
+              Real t0 = 0;
+              Real t1 = 0;
+              for (int j = 0; j < NP; j++) {
+                t0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
+                t1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
+              }
+              t0 *= sphere_rrearth;
+              t1 *= sphere_rrearth;
+              grad_tmp0[iz] = dinv00 * t0 + dinv01 * t1;
+              grad_tmp1[iz] = dinv10 * t0 + dinv11 * t1;
+
+              dp_tens[iz] = div_vdp[iz];
+
+              Real tt = div_vdp[iz] * ttmp0[ix * NP + iy];
+              tt += grad_tmp0[iz] * vdp0[iz] + grad_tmp1[iz] * vdp1[iz];
+              theta_tens[iz] = tt;
+
+              team.team_barrier();
+            });
+
        });
     }
 
@@ -697,8 +731,10 @@ struct CaarFunctorImpl {
     if (!m_theta_hydrostatic_mode) {
       compute_w_and_phi_tens (kv);
     }
-#endif
 
+    compute_dp_and_theta_tens (kv);
+
+#endif
 #if 0
     kv.team_barrier();
     Kokkos::parallel_for(
@@ -707,21 +743,17 @@ struct CaarFunctorImpl {
         const int igp = idx / NP;
         const int jgp = idx % NP;
         Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team,NUM_LEV_P),
+          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d grad_phinh_i grad_w_i w_tens phi_tens %g %g %g %g %g %g\n",
+            printf("TREY %d %d %d %d grad_tmp dp_tens theta_tens %g %g %g %g\n",
                    kv.ie,igp,jgp,ilev,
-                   m_buffers.grad_phinh_i(kv.ie,0,igp,jgp,ilev)[0],
-                   m_buffers.grad_phinh_i(kv.ie,1,igp,jgp,ilev)[0],
-                   m_buffers.grad_w_i(kv.ie,0,igp,jgp,ilev)[0],
-                   m_buffers.grad_w_i(kv.ie,1,igp,jgp,ilev)[0],
-                   m_buffers.w_tens(kv.ie,igp,jgp,ilev)[0],
-                   m_buffers.phi_tens(kv.ie,igp,jgp,ilev)[0]);
+                   m_buffers.grad_tmp(kv.ie,0,igp,jgp,ilev)[0],
+                   m_buffers.grad_tmp(kv.ie,1,igp,jgp,ilev)[0],
+                   m_buffers.dp_tens(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.theta_tens(kv.ie,igp,jgp,ilev)[0]);
           });
       });
 #endif
-    compute_dp_and_theta_tens (kv);
-
     // ============= EPOCH 4 =========== //
     // compute_v_tens reuses some buffers used by compute_dp_and_theta_tens 
     kv.team_barrier();
