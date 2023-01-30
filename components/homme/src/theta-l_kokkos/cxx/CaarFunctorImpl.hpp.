@@ -336,7 +336,7 @@ struct CaarFunctorImpl {
     GPTLstart("caar compute");
 
     // TREY
-    if ((m_rsplit > 0) && (!m_theta_hydrostatic_mode)) {
+    if ((m_rsplit > 0) && (!m_theta_hydrostatic_mode) && (m_theta_advection_form == AdvectionForm::NonConservative)) {
     //if (false) {
 
       static_assert(VECTOR_SIZE == 1, "VECTOR_SIZE != 1");
@@ -345,46 +345,67 @@ struct CaarFunctorImpl {
       constexpr int NPNL = NP * NUM_LEV;
       constexpr int REAL_PER_NPNP = NPNP * sizeof(Real);
       constexpr int REAL_PER_THREAD = REAL_PER_NPNP * WARP_SIZE;
-      constexpr int REAL_PER_POINT = REAL_PER_NPNP * NUM_LEV;
-      constexpr int LEV_PER_THREAD = NUM_LEV / WARP_SIZE;
+      constexpr int REAL_PER_POINT = REAL_PER_NPNP * NUM_LEV_P;
 
       using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
       using Team = TeamPolicy::member_type;
 
-      auto &div_vdp_view = m_buffers.div_vdp;
-      auto &dp_i_view = m_buffers.dp_i;
-      auto &dpnh_dp_i_view = m_buffers.dpnh_dp_i;
-      auto &exner_view = m_buffers.exner;
-      auto &omega_p_view = m_buffers.omega_p;
-      auto &pnh_view = m_buffers.pnh;
-      auto &v_i_view = m_buffers.v_i;
-      auto &vdp_view = m_buffers.vdp;
+      auto &buffers_div_vdp = m_buffers.div_vdp;
+      auto &buffers_dp_i = m_buffers.dp_i;
+      auto &buffers_dp_tens = m_buffers.dp_tens;
+      auto &buffers_dpnh_dp_i = m_buffers.dpnh_dp_i;
+      auto &buffers_exner = m_buffers.exner;
+      auto &buffers_grad_phinh_i = m_buffers.grad_phinh_i;
+      auto &buffers_grad_tmp = m_buffers.grad_tmp;
+      auto &buffers_grad_w_i = m_buffers.grad_w_i;
+      auto &buffers_omega_p = m_buffers.omega_p;
+      auto &buffers_phi = m_buffers.phi;
+      auto &buffers_phi_tens = m_buffers.phi_tens;
+      auto &buffers_pi = m_buffers.pi;
+      auto &buffers_pnh = m_buffers.pnh;
+      auto &buffers_temp = m_buffers.temp;
+      auto &buffers_theta_tens = m_buffers.theta_tens;
+      auto &buffers_v_i = m_buffers.v_i;
+      auto &buffers_v_tens = m_buffers.v_tens;
+      auto &buffers_vdp = m_buffers.vdp;
+      auto &buffers_vort = m_buffers.vort;
+      auto &buffers_w_tens = m_buffers.w_tens;
 
-      const Real eta_ave_w = m_data.eta_ave_w;
-      const int n0 = m_data.n0;
-      const Real scale1 = m_data.scale1;
-      const Real gscale1 = scale1 * PhysicalConstants::g;
-      const Real gscale2 = m_data.scale2 * PhysicalConstants::g;
+      const Real data_dt = m_data.dt;
+      const Real data_eta_ave_w = m_data.eta_ave_w;
+      const int data_n0 = m_data.n0;
+      const int data_nm1 = m_data.nm1;
+      const int data_np1 = m_data.np1;
+      const Real data_scale1 = m_data.scale1;
+      const Real data_scale3 = m_data.scale3;
+
+      auto &derived_omega_p = m_derived.m_omega_p;
+      auto &derived_vn0 = m_derived.m_vn0;
+
+      const Real *const hvcoord_hybrid_bi_packed = reinterpret_cast<const Real *>(m_hvcoord.hybrid_bi_packed.data());
+
+      auto &geometry_fcor = m_geometry.m_fcor;
+      auto &geometry_gradphis = m_geometry.m_gradphis;
+      auto &geometry_spheremp = m_geometry.m_spheremp;
+
+      auto &sphere_d = m_sphere_ops.m_d;
+      auto &sphere_dinv = m_sphere_ops.m_dinv;
+      auto &sphere_dvv = m_sphere_ops.dvv;
+      auto &sphere_metdet = m_sphere_ops.m_metdet;
+      const Real sphere_rrearth = m_sphere_ops.m_rrearth;
+
+      auto &state_dp3d = m_state.m_dp3d;
+      auto &state_phinh_i = m_state.m_phinh_i;
+      auto &state_v = m_state.m_v;
+      auto &state_vtheta_dp = m_state.m_vtheta_dp;
+      auto &state_w_i = m_state.m_w_i;
+
+      const Real div1mkappa = 1.0 / (1.0 - PhysicalConstants::kappa);
+      const Real divp0 = 1.0 / PhysicalConstants::p0;
       const Real dscale = m_data.scale1 - m_data.scale2;
-
-      auto &derived_omega_p_view = m_derived.m_omega_p;
-      auto &derived_vn0_view = m_derived.m_vn0;
-
-      auto &gradphis_view = m_geometry.m_gradphis;
-
-      const Real pi_i0 = m_hvcoord.ps0*m_hvcoord.hybrid_ai0;
-      const Real *const hybrid_bi_packed = reinterpret_cast<const Real *>(m_hvcoord.hybrid_bi_packed.data());
-
-      const auto &dvv_view = m_sphere_ops.dvv;
-      const auto &dinv_view = m_sphere_ops.m_dinv;
-      const auto &metdet_view = m_sphere_ops.m_metdet;
-      const Real rrearth = m_sphere_ops.m_rrearth;
-
-      auto &dp3d_view = m_state.m_dp3d;
-      auto &phinh_i_view = m_state.m_phinh_i;
-      auto &v_view = m_state.m_v;
-      auto &vtheta_dp_view = m_state.m_vtheta_dp;
-      auto &w_i_view = m_state.m_w_i;
+      const Real gscale1 = PhysicalConstants::g * m_data.scale1;
+      const Real gscale2 = PhysicalConstants::g * m_data.scale2;
+      const Real pi_i00 = m_hvcoord.ps0*m_hvcoord.hybrid_ai0;
 
       Kokkos::parallel_for(
         "caar loop pre-boundary exchange lambda",
@@ -404,214 +425,363 @@ struct CaarFunctorImpl {
               dz = k;
             });
 
+          const Real metdet = sphere_metdet(ie,ix,iy);
+          const Real rrdmd = (1.0 / metdet) * sphere_rrearth;
+
+          const Real *const dinv = &sphere_dinv(ie,0,0,ix,iy);
+          const Real dinv00 = dinv[0];
+          const Real dinv01 = dinv[NPNP];
+          const Real dinv10 = dinv[2*NPNP];
+          const Real dinv11 = dinv[3*NPNP];
+
           Real *const ttmp00 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_THREAD));
           Real *const ttmp0 = ttmp00 + dz * NPNP;
+
           Real *const ttmp10 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_THREAD));
           Real *const ttmp1 = ttmp10 + dz * NPNP;
 
           Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_NPNP));
-          if (dz == 0) dvv[ix * NP + iy] = dvv_view(ix,iy);
+          if (dz == 0) dvv[ix * NP + iy] = sphere_dvv(ix,iy);
 
-          const Real *const vn00 = &v_view(ie,n0,0,ix,iy,0)[0];
-          const Real *const vn01 = &v_view(ie,n0,1,ix,iy,0)[0];
+          const Real *const dp3d0 = &state_dp3d(ie,data_n0,ix,iy,0)[0];
+          const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
+          const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
 
-          const Real metdet = metdet_view(ie,ix,iy);
-          const Real dinv00 = dinv_view(ie,0,0,ix,iy) * metdet;
-          const Real dinv01 = dinv_view(ie,0,1,ix,iy) * metdet;
-          const Real dinv10 = dinv_view(ie,1,0,ix,iy) * metdet;
-          const Real dinv11 = dinv_view(ie,1,1,ix,iy) * metdet;
-          const Real rrdmd = (1.0 / metdet) * rrearth;
+          Real *const div_vdp = &buffers_div_vdp(ie,ix,iy,0)[0];
+          Real *const vdp0 = &buffers_vdp(ie,0,ix,iy,0)[0];
+          Real *const vdp1 = &buffers_vdp(ie,1,ix,iy,0)[0];
+          Real *const dp_i = &buffers_dp_i(ie,ix,iy,0)[0];
 
-          Real *const div_vdp = &div_vdp_view(ie,ix,iy,0)[0];
-          Real *const vdp0 = &vdp_view(ie,0,ix,iy,0)[0];
-          Real *const vdp1 = &vdp_view(ie,1,ix,iy,0)[0];
-          const Real *const dp3dn0 = &dp3d_view(ie,n0,ix,iy,0)[0];
+          Real *const dvn00 = &derived_vn0(ie,0,ix,iy,0)[0];
+          Real *const dvn01 = &derived_vn0(ie,1,ix,iy,0)[0];
 
-          Real *const derived_vn00 = &derived_vn0_view(ie,0,ix,iy,0)[0];
-          Real *const derived_vn01 = &derived_vn0_view(ie,1,ix,iy,0)[0];
+          dp_i[0] = dp3d0[0];
+          dp_i[NUM_LEV] = dp3d0[NUM_LEV-1];
 
-          for (int k = 0; k < LEV_PER_THREAD; k++) {
-
-            const int iz = dz + k * WARP_SIZE;
-
-            vdp0[iz] = vn00[iz] * dp3dn0[iz];
-            derived_vn00[iz] += eta_ave_w * vdp0[iz];
-            vdp1[iz] = vn01[iz] * dp3dn0[iz];
-            derived_vn01[iz] += eta_ave_w * vdp1[iz];
-
-            ttmp0[ix * NP + iy] = dinv00 * vdp0[iz] + dinv10 * vdp1[iz];
-            ttmp1[ix * NP + iy] = dinv01 * vdp0[iz] + dinv11 * vdp1[iz];
-
-            team.team_barrier();
-
-            Real dudv = 0;
-            for (int j = 0; j < NP; j++) {
-              dudv += dvv[iy * NP + j] * ttmp0[ix * NP + j] + dvv[ix * NP + j] * ttmp1[j * NP + iy];
-            }
-            div_vdp[iz] = dudv * rrdmd;
-
-            team.team_barrier();
-          }
-
-          Real *const ptmp00 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_POINT));
-          Real *const ptmp0 = ptmp00 + ix * NPNL + iy * NUM_LEV;
-          Kokkos::parallel_scan(
+          Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
-            [&](const int iz, Real &sum, const bool last) {
-              if (iz == 0) sum = pi_i0;
-              sum += dp3dn0[iz];
-              if (last) ptmp0[iz] = sum;
+            [&] (const int iz) {
+
+              if (iz > 0) dp_i[iz] = 0.5 * (dp3d0[iz-1] + dp3d0[iz]);
+
+              vdp0[iz] = v00[iz] * dp3d0[iz];
+              dvn00[iz] += data_eta_ave_w * vdp0[iz];
+
+              vdp1[iz] = v01[iz] * dp3d0[iz];
+              dvn01[iz] += data_eta_ave_w * vdp1[iz];
+
+              ttmp0[ix * NP + iy] = (dinv00 * vdp0[iz] + dinv10 * vdp1[iz]) * metdet;
+              ttmp1[ix * NP + iy] = (dinv01 * vdp0[iz] + dinv11 * vdp1[iz]) * metdet;
+
+              team.team_barrier();
+
+              Real dudv = 0;
+              for (int j = 0; j < NP; j++) {
+                dudv += dvv[iy * NP + j] * ttmp0[ix * NP +j] + dvv[ix * NP + j] * ttmp1[j * NP + iy];
+              }
+              div_vdp[iz] = dudv * rrdmd;
+
+              team.team_barrier();
             });
 
-          Real *const ptmp10 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_POINT));
-          Real *const ptmp1 = ptmp10 + ix * NPNL + iy * NUM_LEV;
+          Real *const pi_i = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
           Kokkos::parallel_scan(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz, Real &sum, const bool last) {
+              if (iz == 0) pi_i[0] = sum = pi_i00;
+              sum += dp3d0[iz];
+              if (last) pi_i[iz+1] = sum;
+            });
+
+          Real *const omega_i = &buffers_grad_phinh_i(ie,0,ix,iy,0)[0];
+          Kokkos::parallel_scan(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz, Real &sum, const bool last) {
+              if (iz == 0) omega_i[0] = 0;
               sum += div_vdp[iz];
-              if (last) ptmp1[iz] = sum;
+              if (last) omega_i[iz+1] = sum;
             });
 
-          team.team_barrier();
+          Real *const omega_p = &buffers_omega_p(ie,ix,iy,0)[0];
+          Real *const pi = &buffers_pi(ie,ix,iy,0)[0];
+          Real *const grad_tmp0 = &buffers_grad_tmp(ie,0,ix,iy,0)[0];
+          Real *const grad_tmp1 = &buffers_grad_tmp(ie,1,ix,iy,0)[0];
 
-          const Real *const vtheta_dp = &vtheta_dp_view(ie,n0,ix,iy,0)[0];
-          const Real *const phinh_i = &phinh_i_view(ie,n0,ix,iy,0)[0];
+          Real *const exner = &buffers_exner(ie,ix,iy,0)[0];
+          Real *const phi = &buffers_phi(ie,ix,iy,0)[0];
+          Real *const pnh = &buffers_pnh(ie,ix,iy,0)[0];
 
-          Real *const derived_omega_p = &derived_omega_p_view(ie,ix,iy,0)[0];
+          const Real *const vtheta_dp0 = &state_vtheta_dp(ie,data_n0,ix,iy,0)[0];
+          const Real *const phinh_i0 = &state_phinh_i(ie,data_n0,ix,iy,0)[0];
 
-          Real *const omega_buf = &omega_p_view(ie,ix,iy,0)[0];
-          Real *const exner_buf = &exner_view(ie,ix,iy,0)[0];
-          Real *const pnh_buf = &pnh_view(ie,ix,iy,0)[0];
+          Real *const v_i0 = &buffers_v_i(ie,0,ix,iy,0)[0];
+          Real *const v_i1 = &buffers_v_i(ie,1,ix,iy,0)[0];
 
-          for (int k = 0; k < LEV_PER_THREAD; k++) {
-            const int iz = dz + k * WARP_SIZE;
+          Real *const domega_p = &derived_omega_p(ie,ix,iy,0)[0];
+          v_i0[0] = v00[0];
+          v_i1[0] = v01[0];
 
-            const Real pi_im1 = iz ? ptmp0[iz-1] : 0;
-            const Real pi = 0.5 * (pi_im1 + ptmp0[iz]);
-            ttmp0[ix * NP + iy] = pi;
+          v_i0[NUM_LEV] = v00[NUM_LEV-1];
+          v_i1[NUM_LEV] = v01[NUM_LEV-1];
 
-            team.team_barrier();
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
 
-            Real d0 = 0;
-            Real d1 = 0;
-            for (int j = 0; j < NP; j++) { 
-              d0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
-              d1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
-            }
-            const Real g0 = rrdmd * (dinv00 * d0 + dinv01 * d1);
-            const Real g1 = rrdmd * (dinv10 * d0 + dinv11 * d1);
-            const Real omega_im1 = (iz > 0) ? ptmp1[iz-1] : 0;
-            Real omega = -0.5 * (omega_im1 + ptmp1[iz]);
-            omega += vn00[iz] * g0 + vn01[iz] * g1;
-            derived_omega_p[iz] += eta_ave_w * omega;
+              if (iz > 0) {
+                const Real denom = 1.0 / (2.0 * dp_i[iz]);
+                v_i0[iz] = (dp3d0[iz] * v00[iz] + dp3d0[iz-1] * v00[iz-1]) * denom;
+                v_i1[iz] = (dp3d0[iz] * v01[iz] + dp3d0[iz-1] * v01[iz-1]) * denom;
+              }
 
-            const Real phi = 0.5*(phinh_i[iz+1] + phinh_i[iz]);
-            Real exner = phinh_i[iz+1] - phinh_i[iz];
-            const Real vdpiz = vtheta_dp[iz];
-            if ((vdpiz < 0) || (exner > 0)) abort();
-            exner = -PhysicalConstants::Rgas * vdpiz / exner;
-            Real pnh = exner/PhysicalConstants::p0;
-            pnh = pow(pnh, 1.0 / (1.0 - PhysicalConstants::kappa));
-            pnh *= PhysicalConstants::p0;
-            exner = pnh / exner;
+              omega_p[iz] = -0.5 * (omega_i[iz] + omega_i[iz+1]);
+              pi[iz] = 0.5 * (pi_i[iz] + pi_i[iz+1]);
+              ttmp0[ix * NP + iy] = pi[iz];
 
-            ptmp0[iz] = pnh;
+              team.team_barrier();
 
-            omega_buf[iz] = omega;
-            exner_buf[iz] = exner;
-            pnh_buf[iz] = pnh;
+              Real dpi0 = 0;
+              Real dpi1 = 0;
+              for (int j = 0; j < NP; j++) {
+                dpi0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
+                dpi1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
+              }
+              dpi0 *= sphere_rrearth;
+              dpi1 *= sphere_rrearth;
+              grad_tmp0[iz] = dinv00 * dpi0 + dinv01 * dpi1;
+              grad_tmp1[iz] = dinv10 * dpi0 + dinv11 * dpi1;
 
-            team.team_barrier();
-          }
+              omega_p[iz] += v00[iz] * grad_tmp0[iz] + v01[iz] * grad_tmp1[iz];
+              domega_p[iz] += data_eta_ave_w * omega_p[iz];
 
-          Real *const dp_i = &dp_i_view(ie,ix,iy,0)[0];
-          Real *const u_i = &v_i_view(ie,0,ix,iy,0)[0];
-          Real *const v_i = &v_i_view(ie,1,ix,iy,0)[0];
-          Real *const dpnh_dp_i = &dpnh_dp_i_view(ie,ix,iy,0)[0];
+              phi[iz] = 0.5 * (phinh_i0[iz+1] + phinh_i0[iz]);
+              const Real dphi = phinh_i0[iz+1] - phinh_i0[iz];
+              if ((vtheta_dp0[iz] < 0) || (dphi > 0)) abort();
 
-          for (int k = 0; k < LEV_PER_THREAD; k++) {
-            const int iz = dz + k * WARP_SIZE;
+              Real exneriz = -PhysicalConstants::Rgas * vtheta_dp0[iz] / dphi;
+              Real pnhiz = exneriz * divp0;
+              pnhiz = pow(pnhiz, div1mkappa);
+              pnhiz *= PhysicalConstants::p0;
+              exneriz = pnhiz / exneriz;
 
-            const Real dp0 = dp3dn0[iz];
-            const Real dp1 = dp3dn0[iz+1];
-            const Real dpi = (iz < NUM_LEV-1) ? 0.5 * (dp0 + dp1) : dp1;
-            if (iz == 0) dp_i[0] = dp0; 
-            dp_i[iz+1] = dpi;
-            const Real div2dpi = 1.0 / (2.0 * dpi);
+              pnh[iz] = pnhiz;
+              exner[iz] = exneriz;
 
-            const Real u0 = vn00[iz];
-            const Real u1 = vn00[iz+1];
-            const Real ui = (iz < NUM_LEV-1) ? div2dpi * (u0 * dp0 + u1 * dp1) : u0;
-            if (iz == 0) u_i[0] = u0;
-            u_i[iz+1] = ui;
+              team.team_barrier();
+            });
 
-            const Real v0 = vn01[iz];
-            const Real v1 = vn01[iz+1];
-            const Real vi = (iz < NUM_LEV-1) ? div2dpi * (v0 * dp0 + v1 * dp1) : v0;
-            if (iz == 0) v_i[0] = v0;
-            v_i[iz+1] = vi;
+          Real *const dpnh_dp_i = &buffers_dpnh_dp_i(ie,ix,iy,0)[0];
 
-            const Real pnh0 = ptmp0[iz];
-            const Real pnh1 = ptmp0[iz+1];
-            Real dpnhi = (iz < NUM_LEV-1) ? (pnh1 - pnh0) : dpi;
-            dpnhi *= 2.0 * div2dpi;
-            dpnh_dp_i[iz+1] = dpnhi;
+          dpnh_dp_i[0] = 2.0 * (pnh[0] - pi_i00) / dp_i[0];
+          const Real pnh_last = pnh[NUM_LEV-1];
+          const Real dp_last = dp_i[NUM_LEV];
+          const Real pnh_i_last = pnh_last + 0.5 * dp_last;
+          dpnh_dp_i[NUM_LEV] = 2.0 * (pnh_i_last - pnh_last) / dp_last;
 
-            const Real dpnhi0 = 4.0 * div2dpi * (pnh0 - pi_i0);
-            if (iz == 0) dpnh_dp_i[0] = dpnhi0;
-          }
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
+              if (iz > 0) dpnh_dp_i[iz] = (pnh[iz] - pnh[iz-1]) / dp_i[iz];
+            });
 
-          team.team_barrier();
+          const Real *const phinh_i00 = &state_phinh_i(ie,data_n0,0,0,0)[0];
+          const Real *const w_i00 = &state_w_i(ie,data_n0,0,0,0)[0];
+          const Real *const w_i0 = w_i00 + (ix * NP + iy) * NUM_LEV_P;
 
-          const Real *const phinh_ie = &phinh_i_view(ie,n0,0,0,0)[0];
-          const Real *const w_ie = &w_i_view(ie,n0,0,0,0)[0];
-          const Real gradphis0 = gradphis_view(ie,0,ix,iy);
-          const Real gradphis1 = gradphis_view(ie,1,ix,iy);
+          Real *const grad_phinh_i0 = &buffers_grad_phinh_i(ie,0,ix,iy,0)[0];
+          Real *const grad_phinh_i1 = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
+          Real *const grad_w_i0 = &buffers_grad_w_i(ie,0,ix,iy,0)[0];
+          Real *const grad_w_i1 = &buffers_grad_w_i(ie,1,ix,iy,0)[0];
+          Real *const phi_tens = &buffers_phi_tens(ie,ix,iy,0)[0];
+          Real *const w_tens = &buffers_w_tens(ie,ix,iy,0)[0];
+          Real *const phi_np1 = &state_phinh_i(ie,data_np1,ix,iy,0)[0];
+          const Real *const phi_nm1 = &state_phinh_i(ie,data_nm1,ix,iy,0)[0];
+
+          Real *const w_np1 = &state_w_i(ie,data_np1,ix,iy,0)[0];
+          const Real *const w_nm1 = &state_w_i(ie,data_nm1,ix,iy,0)[0];
+
+          const Real gradphis0 = geometry_gradphis(ie,0,ix,iy);
+          const Real gradphis1 = geometry_gradphis(ie,1,ix,iy);
+          const Real spheremp = geometry_spheremp(ie,ix,iy);
+          const Real dt_spheremp = data_dt * spheremp;
+          const Real scale3_spheremp = data_scale3 * spheremp;
+
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV_P),
             [&](const int iz) {
-              Real dphi0 = 0;
-              Real dphi1 = 0;
-              Real dw0 = 0;
-              Real dw1 = 0;
+
+              double p0 = 0;
+              double p1 = 0;
+              double w0 = 0;
+              double w1 = 0;
               for (int j = 0; j < NP; j++) {
-
-                const Real dvvyj = dvv[iy * NP + j];
+                const int iyj = iy * NP + j;
                 const int ixjz = (ix * NP + j) * NUM_LEV_P + iz;
-                dphi0 += dvvyj * phinh_ie[ixjz];
-                dw0 += dvvyj * w_ie[ixjz];
-
-                const Real dvvxj = dvv[ix * NP + j];
+                p0 += dvv[iyj] * phinh_i00[ixjz];
+                w0 += dvv[iyj] * w_i00[ixjz];
+                const int ixj = ix * NP + j;
                 const int ijyz = (j * NP + iy) * NUM_LEV_P + iz;
-                dphi1 += dvvxj * phinh_ie[ijyz];
-                dw1 += dvvxj * w_ie[ijyz];
+                p1 += dvv[ixj] * phinh_i00[ijyz];
+                w1 += dvv[ixj] * w_i00[ijyz];
+              }
+              p0 *= sphere_rrearth;
+              p1 *= sphere_rrearth;
+              w0 *= sphere_rrearth;
+              w1 *= sphere_rrearth;
+              grad_phinh_i0[iz] = dinv00 * p0 + dinv01 * p1;
+              grad_phinh_i1[iz] = dinv10 * p0 + dinv11 * p1;
+              grad_w_i0[iz] = dinv00 * w0 + dinv01 * w1;
+              grad_w_i1[iz] = dinv10 * w0 + dinv11 * w1;
+
+              Real wt = v_i0[iz] * grad_w_i0[iz] + v_i1[iz] * grad_w_i1[iz];
+              wt *= -data_scale1;
+              const Real scale = (iz == NUM_LEV) ? gscale1 : gscale2;
+              wt += (dpnh_dp_i[iz] - 1.0) * scale;
+              wt *= dt_spheremp;
+              w_tens[iz] = wt;
+              w_np1[iz] = w_nm1[iz] * scale3_spheremp + wt;
+
+              Real pt = v_i0[iz] * grad_phinh_i0[iz] + v_i1[iz] * grad_phinh_i1[iz];
+              pt *= -data_scale1;
+              pt += w_i0[iz] * gscale2;
+              pt += dscale * (v_i0[iz] * gradphis0 + v_i1[iz] * gradphis1) * hvcoord_hybrid_bi_packed[iz];
+              if (iz < NUM_LEV) pt *= dt_spheremp;
+              phi_tens[iz] = pt;
+              if (iz < NUM_LEV) phi_np1[iz] = phi_nm1[iz] * scale3_spheremp + pt; 
+
+              team.team_barrier();
+
+              v_i0[iz] = grad_w_i0[iz];
+              v_i1[iz] = grad_w_i1[iz];
+
+              team.team_barrier();
+            });
+
+          Real *const dp_tens = &buffers_dp_tens(ie,ix,iy,0)[0];
+          Real *const theta_tens = &buffers_theta_tens(ie,ix,iy,0)[0];
+          Real *const v_tens0 = &buffers_v_tens(ie,0,ix,iy,0)[0];
+          Real *const v_tens1 = &buffers_v_tens(ie,1,ix,iy,0)[0];
+          Real *const vort = &buffers_vort(ie,ix,iy,0)[0];
+
+          Real *const temp = &buffers_temp(ie,ix,iy,0)[0];
+
+          const Real *const d = &sphere_d(ie,0,0,ix,iy);
+          const Real d00 = d[0];
+          const Real d01 = d[NPNP];
+          const Real d10 = d[2*NPNP];
+          const Real d11 = d[3*NPNP];
+
+          const Real fcor = geometry_fcor(ie,ix,iy);
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
+
+              const double vtheta = vtheta_dp0[iz] / dp3d0[iz];
+              ttmp0[ix * NP + iy] = vtheta;
+
+              team.team_barrier();
+
+              Real t0 = 0;
+              Real t1 = 0;
+              for (int j = 0; j < NP; j++) {
+                t0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
+                t1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
+              }
+              t0 *= sphere_rrearth;
+              t1 *= sphere_rrearth;
+              grad_tmp0[iz] = dinv00 * t0 + dinv01 * t1;
+              grad_tmp1[iz] = dinv10 * t0 + dinv11 * t1;
+
+              dp_tens[iz] = div_vdp[iz];
+
+              Real tt = div_vdp[iz] * ttmp0[ix * NP + iy];
+              tt += grad_tmp0[iz] * vdp0[iz] + grad_tmp1[iz] * vdp1[iz];
+              theta_tens[iz] = tt;
+
+              team.team_barrier();
+
+              ttmp0[ix * NP + iy] = d00 * v00[iz] + d01 * v01[iz];
+              ttmp1[ix * NP + iy] = d10 * v00[iz] + d11 * v01[iz];
+
+              team.team_barrier();
+
+              Real dvmdu = 0;
+              for (int j = 0; j < NP; j++) {
+                dvmdu += dvv[iy * NP + j] * ttmp1[ix * NP +j] - dvv[ix * NP + j] * ttmp0[j * NP + iy];
+              }
+              vort[iz] = dvmdu * rrdmd + fcor;
+
+              team.team_barrier();
+
+              temp[iz] = ttmp0[ix * NP + iy] = 0.5 * (v00[iz] * v00[iz] + v01[iz] * v01[iz]);
+
+              ttmp1[ix * NP + iy] = 0.25 * (w_i0[iz] * w_i0[iz] + w_i0[iz+1] * w_i0[iz + 1]);
+
+              team.team_barrier();
+
+              Real s0 = 0;
+              Real s1 = 0;
+              t0 = t1 = 0;
+              for (int j = 0; j < NP; j++) {
+                s0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
+                t0 += dvv[iy * NP + j] * ttmp1[ix * NP + j];
+                s1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
+                t1 += dvv[ix * NP + j] * ttmp1[j * NP + iy];
               }
 
-              const Real grad_w_i0 = rrdmd * (dinv00 * dw0 + dinv01 * dw1);
-              const Real grad_w_i1 = rrdmd * (dinv10 * dw0 + dinv11 * dw1);
-              Real w_tens = u_i[iz] * grad_w_i0 + v_i[iz] * grad_w_i1;
-              w_tens *= -scale1;
-              const Real scale = (iz == NUM_LEV) ? gscale1 : gscale2;
-              w_tens += (dpnh_dp_i[iz]-1.0) * scale;
+              s0 *= sphere_rrearth;
+              s1 *= sphere_rrearth;
+              v_tens0[iz] = dinv00 * s0 + dinv01 * s1;
+              v_tens1[iz] = dinv10 * s0 + dinv11 * s1;
 
-              const Real grad_phinh_i0 = rrdmd * (dinv00 * dphi0 + dinv01 * dphi1);
-              const Real grad_phinh_i1 = rrdmd * (dinv10 * dphi0 + dinv11 * dphi1);
-              Real phi_tens = u_i[iz] * grad_phinh_i0 + v_i[iz] * grad_phinh_i1;
-              phi_tens *= -scale1;
-              phi_tens += w_ie[iz] * gscale2;
-              phi_tens += dscale * (u_i[iz] *  gradphis0 + v_i[iz] * gradphis1) * hybrid_bi_packed[iz];
-              printf("TREY %d %d %d %d w_tens phi_tens new %g %g\n",ie,ix,iy,iz,w_tens,phi_tens);
+              t0 *= sphere_rrearth;
+              t1 *= sphere_rrearth;
+              vdp0[iz] = dinv00 * t0 + dinv01 * t1;
+              vdp1[iz] = dinv10 * t0 + dinv11 * t1;
+
+              vdp0[iz] -= 0.5 * (v_i0[iz] * w_i0[iz] + v_i0[iz+1] * w_i0[iz+1]);
+              vdp1[iz] -= 0.5 * (v_i1[iz] * w_i0[iz] + v_i1[iz+1] * w_i0[iz+1]);
+
+              vdp0[iz] += 0.5 * (grad_phinh_i0[iz] * dpnh_dp_i[iz] + grad_phinh_i0[iz+1] * dpnh_dp_i[iz+1]);
+              vdp1[iz] += 0.5 * (grad_phinh_i1[iz] * dpnh_dp_i[iz] + grad_phinh_i1[iz+1] * dpnh_dp_i[iz+1]);
+
+              team.team_barrier();
+
+              ttmp0[ix * NP + iy] = exner[iz];
+
+              team.team_barrier();
+
+              t0 = t1 = 0;
+              for (int j = 0; j < NP; j++) {
+                t0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
+                t1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
+              }
+              t0 *= sphere_rrearth;
+              t1 *= sphere_rrearth;
+              grad_tmp0[iz] = dinv00 * t0 + dinv01 * t1;
+              grad_tmp1[iz] = dinv10 * t0 + dinv11 * t1;
+
+              const double cp_vtheta = PhysicalConstants::cp * vtheta;
+              v_tens0[iz] += cp_vtheta * grad_tmp0[iz] + vdp0[iz] - v01[iz] * vort[iz];
+              v_tens1[iz] += cp_vtheta * grad_tmp1[iz] + vdp1[iz] + v00[iz] * vort[iz];
+
+              team.team_barrier();
+
             });
-        });
+
+       });
     }
 
     int nerr;
     Kokkos::parallel_reduce("caar loop pre-boundary exchange", m_policy_pre, *this, nerr);
     Kokkos::fence();
 #if 1
-    printf("TREY %s %s\n", __DATE__, __TIME__);
-    fflush(stdout);
-    exit(0);
+    if (m_data.n0 == 2) {
+      printf("TREY %s %s\n", __DATE__, __TIME__);
+      fflush(stdout);
+      exit(0);
+    }
 #endif
     GPTLstop("caar compute");
     if (nerr > 0)
@@ -644,63 +814,21 @@ struct CaarFunctorImpl {
 
     KernelVariables kv(team, m_tu);
 
+#if 0
     // =========== EPOCH 1 =========== //
-    //compute_div_vdp(kv);
+    compute_div_vdp(kv);
 
-#if 0
-    kv.team_barrier();
-    Kokkos::parallel_for(
-      Kokkos::TeamThreadRange(kv.team,NP*NP),
-      [&](const int idx) {
-        const int igp = idx / NP;
-        const int jgp = idx % NP;
-        Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
-          [&](const int ilev) {
-            printf("TREY %d %d %d %d udp vdp div_vdp %g %g %g\n",
-                   kv.ie,igp,jgp,ilev,
-                   m_buffers.vdp(kv.ie,0,igp,jgp,ilev)[0],
-                   m_buffers.vdp(kv.ie,1,igp,jgp,ilev)[0],
-                   m_buffers.div_vdp(kv.ie,igp,jgp,ilev)[0]);
-          });
-      });
-#endif
-
-#if 0
     // =========== EPOCH 2 =========== //
     kv.team_barrier();
     // Computes pi, omega, and phi.
     const bool ok = compute_scan_quantities(kv);
     if ( ! ok) nerr = 1;
-#endif
 
-#if 0
     if (m_rsplit==0 || !m_theta_hydrostatic_mode) {
       // ============ EPOCH 2.1 =========== //
       kv.team_barrier();
       compute_interface_quantities(kv);
     }
-#endif
-
-#if 0
-      kv.team_barrier();
-      Kokkos::parallel_for(
-        Kokkos::TeamThreadRange(kv.team,NP*NP),
-        [&](const int idx) {
-          const int igp = idx / NP;
-          const int jgp = idx % NP;
-          Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(kv.team,NUM_INTERFACE_LEV),
-            [&](const int ilev) {
-              printf("TREY %d %d %d %d dpi ui vi dpnhi old %g %g %g %g\n",
-                     kv.ie,igp,jgp,ilev,
-                     m_buffers.dp_i(kv.ie,igp,jgp,ilev)[0],
-                     m_buffers.v_i(kv.ie,0,igp,jgp,ilev)[0],
-                     m_buffers.v_i(kv.ie,1,igp,jgp,ilev)[0],
-                     m_buffers.dpnh_dp_i(kv.ie,igp,jgp,ilev)[0]);
-            });
-        });
-#endif
 
     if (m_rsplit==0) {
       // ============= EPOCH 2.2 ============ //
@@ -710,27 +838,8 @@ struct CaarFunctorImpl {
 
     // ============= EPOCH 3 ============== //
     kv.team_barrier();
-    //compute_accumulated_quantities(kv);
+    compute_accumulated_quantities(kv);
 
-#if 0
-      kv.team_barrier();
-      Kokkos::parallel_for(
-        Kokkos::TeamThreadRange(kv.team,NP*NP),
-        [&](const int idx) {
-          const int igp = idx / NP;
-          const int jgp = idx % NP;
-          Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
-            [&](const int ilev) {
-              printf("TREY %d %d %d %d omega_p omega_p+ vn0 %g %g %g %g\n",
-                     kv.ie,igp,jgp,ilev,
-                     m_buffers.omega_p(kv.ie,igp,jgp,ilev)[0],
-                     m_derived.m_omega_p(kv.ie,igp,jgp,ilev)[0],
-                     m_derived.m_vn0(kv.ie,0,igp,jgp,ilev)[0],
-                     m_derived.m_vn0(kv.ie,1,igp,jgp,ilev)[0]);
-            });
-        });
-#endif
     // Compute update quantities
     if (!m_theta_hydrostatic_mode) {
       compute_w_and_phi_tens (kv);
@@ -742,10 +851,32 @@ struct CaarFunctorImpl {
     // compute_v_tens reuses some buffers used by compute_dp_and_theta_tens 
     kv.team_barrier();
     compute_v_tens (kv);
+#endif
 
     // Update states
     if (!m_theta_hydrostatic_mode) {
-      compute_w_and_phi_np1(kv);
+      //compute_w_and_phi_np1(kv);
+#if 1
+      if (m_data.n0 == 2) {
+        kv.team_barrier();
+        Kokkos::parallel_for(
+          Kokkos::TeamThreadRange(kv.team,NP*NP),
+          [&](const int idx) {
+            const int igp = idx / NP;
+            const int jgp = idx % NP;
+            Kokkos::parallel_for(
+              Kokkos::ThreadVectorRange(kv.team,NUM_LEV_P),
+              [&](const int ilev) {
+                printf("TREY %d %d %d %d w_tens phi_tens w_np1 phi_np1 %g %g %g %g\n",
+                       kv.ie,igp,jgp,ilev,
+                       m_buffers.w_tens(kv.ie,igp,jgp,ilev)[0],
+                       m_buffers.phi_tens(kv.ie,igp,jgp,ilev)[0],
+                       m_state.m_w_i(kv.ie,m_data.np1,igp,jgp,ilev)[0],
+                       m_state.m_phinh_i(kv.ie,m_data.np1,igp,jgp,ilev)[0]);
+              });
+          });
+      }
+#endif
     }
     compute_dp3d_and_theta_np1(kv);
 
@@ -1354,7 +1485,6 @@ struct CaarFunctorImpl {
                 (v_i(0,igp,jgp,ilev)*m_geometry.m_gradphis(kv.ie,0,igp,jgp) +
                  v_i(1,igp,jgp,ilev)*m_geometry.m_gradphis(kv.ie,1,igp,jgp) ) * m_hvcoord.hybrid_bi_packed(ilev);
         }
-        printf("TREY %d %d %d %d w_tens phi_tens old %g %g\n",kv.ie,igp,jgp,ilev,w_tens(ilev)[0],phi_tens(ilev)[0]);
       });
     });
   }
@@ -1381,19 +1511,22 @@ struct CaarFunctorImpl {
                            [&](const int ilev) {
 
         // Add w_tens to w_nm1 and multiply by spheremp
-        w_tens(ilev) *= m_data.dt*spheremp;
+#if 1
+        //w_tens(ilev) *= m_data.dt*spheremp;
         w_np1(ilev) = m_state.m_w_i(kv.ie,m_data.nm1,igp,jgp,ilev);
         w_np1(ilev) *= m_data.scale3*spheremp;
         w_np1(ilev) += w_tens(ilev);
+#endif
 
         // Add phi_tens to phi_nm1 and multiply by spheremp
         // temp *= m_data.dt*spheremp;
-        phi_tens(ilev) *= m_data.dt*spheremp;
+        //phi_tens(ilev) *= m_data.dt*spheremp;
         phi_np1(ilev) = m_state.m_phinh_i(kv.ie,m_data.nm1,igp,jgp,ilev);
         phi_np1(ilev) *= m_data.scale3*spheremp;
         phi_np1(ilev) += phi_tens(ilev);
       });
 
+#if 1
       // Last interface only for w, not phi (since phi=phis there)
       Kokkos::single(Kokkos::PerThread(kv.team),[&](){
         using Info = ColInfo<NUM_INTERFACE_LEV>;
@@ -1407,12 +1540,13 @@ struct CaarFunctorImpl {
           phi_np1(ilev)[ivec] = m_geometry.m_phis(kv.ie,igp,jgp);
         } else {
           // We didn't do anything on last interface, so update w
-          w_tens(ilev)[ivec] *= m_data.dt*spheremp;
+          //w_tens(ilev)[ivec] *= m_data.dt*spheremp;
           w_np1(ilev)[ivec]  = m_state.m_w_i(kv.ie,m_data.nm1,igp,jgp,ilev)[ivec];
           w_np1(ilev)[ivec] *= m_data.scale3*spheremp;
           w_np1(ilev)[ivec] += w_tens(ilev)[ivec];
         }
       });
+#endif
     });
   }
 
