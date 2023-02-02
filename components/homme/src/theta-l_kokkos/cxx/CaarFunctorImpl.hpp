@@ -336,8 +336,8 @@ struct CaarFunctorImpl {
     GPTLstart("caar compute");
 
     // TREY
-    //if ((m_rsplit > 0) && (!m_theta_hydrostatic_mode) && (m_theta_advection_form == AdvectionForm::NonConservative)) {
-    if (false) {
+#if 1
+    if ((m_rsplit > 0) && (!m_theta_hydrostatic_mode) && (m_theta_advection_form == AdvectionForm::NonConservative)) {
 
       static_assert(VECTOR_SIZE == 1, "VECTOR_SIZE != 1");
       constexpr int NPNP = NP * NP;
@@ -476,7 +476,6 @@ struct CaarFunctorImpl {
 
           // compute_scan_quantities
 
-#if 0
           Real *const pi_i = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
           Kokkos::parallel_scan(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
@@ -496,20 +495,15 @@ struct CaarFunctorImpl {
             });
 
           team.team_barrier();
+
           Real *const pi = &buffers_pi(ie,ix,iy,0)[0];
-          Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(team, NUM_LEV),
-            [&](const int iz) {
-              pi[iz] = 0.5 * (pi_i[iz] + pi_i[iz+1]);
-            });
-          team.team_barrier();
+          Real *const omega_p = &buffers_omega_p(ie,ix,iy,0)[0];
+          Real *const grad_tmp0 = &buffers_grad_tmp(ie,0,ix,iy,0)[0];
+          Real *const grad_tmp1 = &buffers_grad_tmp(ie,1,ix,iy,0)[0];
 
           const Real *const vtheta_dp0 = &state_vtheta_dp(ie,data_n0,ix,iy,0)[0];
           const Real *const phinh_i0 = &state_phinh_i(ie,data_n0,ix,iy,0)[0];
 
-          Real *const omega_p = &buffers_omega_p(ie,ix,iy,0)[0];
-          Real *const grad_tmp0 = &buffers_grad_tmp(ie,0,ix,iy,0)[0];
-          Real *const grad_tmp1 = &buffers_grad_tmp(ie,1,ix,iy,0)[0];
           Real *const exner = &buffers_exner(ie,ix,iy,0)[0];
           Real *const phi = &buffers_phi(ie,ix,iy,0)[0];
           Real *const pnh = &buffers_pnh(ie,ix,iy,0)[0];
@@ -517,8 +511,8 @@ struct CaarFunctorImpl {
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz) {
-              omega_p[iz] = -0.5 * (omega_i[iz] + omega_i[iz+1]);
               pi[iz] = 0.5 * (pi_i[iz] + pi_i[iz+1]);
+              omega_p[iz] = -0.5 * (omega_i[iz] + omega_i[iz+1]);
               ttmp0[ix * NP + iy] = pi[iz];
 
               team.team_barrier();
@@ -535,8 +529,8 @@ struct CaarFunctorImpl {
               grad_tmp1[iz] = dinv10 * d0 + dinv11 * d1;
 
               omega_p[iz] += v00[iz] * grad_tmp0[iz] + v01[iz] * grad_tmp1[iz];
-              phi[iz] = 0.5 * (phinh_i0[iz+1] + phinh_i0[iz]);
 
+              phi[iz] = 0.5 * (phinh_i0[iz+1] + phinh_i0[iz]);
               const Real dphi = phinh_i0[iz+1] - phinh_i0[iz];
               if ((vtheta_dp0[iz] < 0) || (dphi > 0)) abort();
 
@@ -549,13 +543,11 @@ struct CaarFunctorImpl {
               pnh[iz] = pnhiz;
               exner[iz] = exneriz;
 
-
               team.team_barrier();
             });
-#endif
-
-       });
+        });
     }
+#endif
 
     int nerr;
     Kokkos::parallel_reduce("caar loop pre-boundary exchange", m_policy_pre, *this, nerr);
@@ -598,16 +590,16 @@ struct CaarFunctorImpl {
 
     KernelVariables kv(team, m_tu);
 
-#if 1
+#if 0
     // =========== EPOCH 1 =========== //
     compute_div_vdp(kv);
-#endif
 
     // =========== EPOCH 2 =========== //
     kv.team_barrier();
     // Computes pi, omega, and phi.
     const bool ok = compute_scan_quantities(kv);
     if ( ! ok) nerr = 1;
+#endif
 
 #if 1
     kv.team_barrier();
@@ -629,12 +621,13 @@ struct CaarFunctorImpl {
         Kokkos::parallel_for(
           Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d %d dp %g pi %g dv %g om %g\n",
+            printf("TREY %d %d %d %d %d pi %g om %g ex %g pnh %g phi %g\n",
                    m_data.n0,kv.ie,igp,jgp,ilev,
-                   m_state.m_dp3d(kv.ie,m_data.n0,igp,jgp,ilev)[0],
                    m_buffers.pi(kv.ie,igp,jgp,ilev)[0],
-                   m_buffers.div_vdp(kv.ie,igp,jgp,ilev)[0],
-                   m_buffers.omega_p(kv.ie,igp,jgp,ilev)[0]);
+                   m_buffers.omega_p(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.exner(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.pnh(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.phi(kv.ie,igp,jgp,ilev)[0]);
           });
 #if 0
         Kokkos::parallel_for(
@@ -900,6 +893,7 @@ struct CaarFunctorImpl {
     bool ok = true;
     
     kv.team_barrier();
+#if 1
     Kokkos::parallel_for(Kokkos::TeamThreadRange(kv.team,NP*NP),
                          [&](const int idx) {
       const int igp = idx / NP;
@@ -949,6 +943,7 @@ struct CaarFunctorImpl {
     // Compute grad(pi)
     m_sphere_ops.gradient_sphere(kv,Homme::subview(m_buffers.pi,kv.team_idx),
                                     Homme::subview(m_buffers.grad_tmp,kv.team_idx));
+#endif
     kv.team_barrier();
 
     // Update omega with v*grad(p)
@@ -957,6 +952,7 @@ struct CaarFunctorImpl {
       const int igp = idx / NP;
       const int jgp = idx % NP;
 
+#if 1
       auto omega = Homme::subview(m_buffers.omega_p,kv.team_idx,igp,jgp);
       auto v = Homme::subview(m_state.m_v,kv.ie,m_data.n0);
       auto grad_pi = Homme::subview(m_buffers.grad_tmp,kv.team_idx);
@@ -965,6 +961,7 @@ struct CaarFunctorImpl {
         omega(ilev) += (v(0,igp,jgp,ilev)*grad_pi(0,igp,jgp,ilev) +
                         v(1,igp,jgp,ilev)*grad_pi(1,igp,jgp,ilev));
       });
+#endif
 
       // Use EOS to compute pnh/exner or exner/phi (depending on whether it's hydro mode).
       if (m_theta_hydrostatic_mode) {
