@@ -335,7 +335,6 @@ struct CaarFunctorImpl {
 
     GPTLstart("caar compute");
 
-    // TREY
 #define TREY
 #ifdef TREY
     if ((m_rsplit > 0) && (!m_theta_hydrostatic_mode) && (m_theta_advection_form == AdvectionForm::NonConservative)) {
@@ -652,6 +651,40 @@ struct CaarFunctorImpl {
               pt += dscale * (v_i0[iz] * gradphis0 + v_i1[iz] * gradphis1) * hvcoord_hybrid_bi_packed[iz];
               phi_tens[iz] = pt;
             });
+
+          // compute_dp_and_theta_tens
+
+          Real *const dp_tens = &buffers_dp_tens(ie,ix,iy,0)[0];
+          Real *const theta_tens = &buffers_theta_tens(ie,ix,iy,0)[0];
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
+
+              const double vtheta = vtheta_dp0[iz] / dp3d0[iz];
+              ttmp0[ix * NP + iy] = vtheta;
+
+              team.team_barrier();
+
+              Real t0 = 0;
+              Real t1 = 0;
+              for (int j = 0; j < NP; j++) {
+                t0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
+                t1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
+              }
+              t0 *= sphere_rrearth;
+              t1 *= sphere_rrearth;
+              grad_tmp0[iz] = dinv00 * t0 + dinv01 * t1;
+              grad_tmp1[iz] = dinv10 * t0 + dinv11 * t1;
+
+              dp_tens[iz] = div_vdp[iz];
+
+              Real tt = div_vdp[iz] * ttmp0[ix * NP + iy];
+              tt += grad_tmp0[iz] * vdp0[iz] + grad_tmp1[iz] * vdp1[iz];
+              theta_tens[iz] = tt;
+
+              team.team_barrier();
+            });
         });
     }
 #endif
@@ -728,6 +761,8 @@ struct CaarFunctorImpl {
     if (!m_theta_hydrostatic_mode) {
       compute_w_and_phi_tens (kv);
     }
+    compute_dp_and_theta_tens (kv);
+
 #endif
 
 #if 1
@@ -738,17 +773,15 @@ struct CaarFunctorImpl {
         const int igp = idx / NP;
         const int jgp = idx % NP;
         Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team,NUM_LEV_P),
+          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d %d wt %g pt %g\n",
+            printf("TREY %d %d %d %d %d dpt %g thetat %g\n",
                    m_data.n0,kv.ie,igp,jgp,ilev,
-                   m_buffers.w_tens(kv.ie,igp,jgp,ilev)[0],
-                   m_buffers.phi_tens(kv.ie,igp,jgp,ilev)[0]);
+                   m_buffers.dp_tens(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.theta_tens(kv.ie,igp,jgp,ilev)[0]);
           });
       });
 #endif
-
-    compute_dp_and_theta_tens (kv);
 
     // ============= EPOCH 4 =========== //
     // compute_v_tens reuses some buffers used by compute_dp_and_theta_tens 
