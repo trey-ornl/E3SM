@@ -581,7 +581,6 @@ struct CaarFunctorImpl {
               dpnh_dp_i[iz+1] = (pnh[iz+1] - pnh[iz]) / dp_i[iz+1];
             });
 
-
           // compute_accumulated_quantities
 
           Real *const domega_p = &derived_omega_p(ie,ix,iy,0)[0];
@@ -594,6 +593,64 @@ struct CaarFunctorImpl {
               domega_p[iz] += data_eta_ave_w * omega_p[iz];
               dvn00[iz] += data_eta_ave_w * vdp0[iz];
               dvn01[iz] += data_eta_ave_w * vdp1[iz];
+            });
+
+          // compute_w_and_phi_tens
+
+          team.team_barrier();
+
+          const Real *const phinh_i00 = &state_phinh_i(ie,data_n0,0,0,0)[0];
+          const Real *const w_i00 = &state_w_i(ie,data_n0,0,0,0)[0];
+          const Real *const w_i0 = w_i00 + (ix * NP + iy) * NUM_LEV_P;
+
+          Real *const grad_phinh_i0 = &buffers_grad_phinh_i(ie,0,ix,iy,0)[0];
+          Real *const grad_phinh_i1 = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
+          Real *const grad_w_i0 = &buffers_grad_w_i(ie,0,ix,iy,0)[0];
+          Real *const grad_w_i1 = &buffers_grad_w_i(ie,1,ix,iy,0)[0];
+          Real *const phi_tens = &buffers_phi_tens(ie,ix,iy,0)[0];
+          Real *const w_tens = &buffers_w_tens(ie,ix,iy,0)[0];
+
+          const Real gradphis0 = geometry_gradphis(ie,0,ix,iy);
+          const Real gradphis1 = geometry_gradphis(ie,1,ix,iy);
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV_P),
+            [&](const int iz) {
+
+              double p0 = 0;
+              double p1 = 0;
+              double w0 = 0;
+              double w1 = 0;
+              for (int j = 0; j < NP; j++) {
+                const int iyj = iy * NP + j;
+                const int ixjz = (ix * NP + j) * NUM_LEV_P + iz;
+                p0 += dvv[iyj] * phinh_i00[ixjz];
+                w0 += dvv[iyj] * w_i00[ixjz];
+                const int ixj = ix * NP + j;
+                const int ijyz = (j * NP + iy) * NUM_LEV_P + iz;
+                p1 += dvv[ixj] * phinh_i00[ijyz];
+                w1 += dvv[ixj] * w_i00[ijyz];
+              }
+              p0 *= sphere_rrearth;
+              p1 *= sphere_rrearth;
+              w0 *= sphere_rrearth;
+              w1 *= sphere_rrearth;
+              grad_phinh_i0[iz] = dinv00 * p0 + dinv01 * p1;
+              grad_phinh_i1[iz] = dinv10 * p0 + dinv11 * p1;
+              grad_w_i0[iz] = dinv00 * w0 + dinv01 * w1;
+              grad_w_i1[iz] = dinv10 * w0 + dinv11 * w1;
+
+              Real wt = v_i0[iz] * grad_w_i0[iz] + v_i1[iz] * grad_w_i1[iz];
+              wt *= -data_scale1;
+              const Real scale = (iz == NUM_LEV) ? gscale1 : gscale2;
+              wt += (dpnh_dp_i[iz] - 1.0) * scale;
+              w_tens[iz] = wt;
+
+              Real pt = v_i0[iz] * grad_phinh_i0[iz] + v_i1[iz] * grad_phinh_i1[iz];
+              pt *= -data_scale1;
+              pt += w_i0[iz] * gscale2;
+              pt += dscale * (v_i0[iz] * gradphis0 + v_i1[iz] * gradphis1) * hvcoord_hybrid_bi_packed[iz];
+              phi_tens[iz] = pt;
             });
         });
     }
@@ -666,6 +723,11 @@ struct CaarFunctorImpl {
     // ============= EPOCH 3 ============== //
     kv.team_barrier();
     compute_accumulated_quantities(kv);
+
+    // Compute update quantities
+    if (!m_theta_hydrostatic_mode) {
+      compute_w_and_phi_tens (kv);
+    }
 #endif
 
 #if 1
@@ -676,21 +738,15 @@ struct CaarFunctorImpl {
         const int igp = idx / NP;
         const int jgp = idx % NP;
         Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
+          Kokkos::ThreadVectorRange(kv.team,NUM_LEV_P),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d %d op %g vn0 %g %g\n",
+            printf("TREY %d %d %d %d %d wt %g pt %g\n",
                    m_data.n0,kv.ie,igp,jgp,ilev,
-                   m_derived.m_omega_p(kv.ie,igp,jgp,ilev)[0],
-                   m_derived.m_vn0(kv.ie,0,igp,jgp,ilev)[0],
-                   m_derived.m_vn0(kv.ie,1,igp,jgp,ilev)[0]);
+                   m_buffers.w_tens(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.phi_tens(kv.ie,igp,jgp,ilev)[0]);
           });
       });
 #endif
-
-    // Compute update quantities
-    if (!m_theta_hydrostatic_mode) {
-      compute_w_and_phi_tens (kv);
-    }
 
     compute_dp_and_theta_tens (kv);
 
