@@ -336,7 +336,8 @@ struct CaarFunctorImpl {
     GPTLstart("caar compute");
 
     // TREY
-#if 1
+#define TREY
+#ifdef TREY
     if ((m_rsplit > 0) && (!m_theta_hydrostatic_mode) && (m_theta_advection_form == AdvectionForm::NonConservative)) {
 
       static_assert(VECTOR_SIZE == 1, "VECTOR_SIZE != 1");
@@ -548,7 +549,6 @@ struct CaarFunctorImpl {
 
           // compute_interface_quantities
 
-
           Real *const dp_i = &buffers_dp_i(ie,ix,iy,0)[0];
 
           dp_i[0] = dp3d0[0];
@@ -579,6 +579,21 @@ struct CaarFunctorImpl {
               v_i0[iz+1] = (dp3d0[iz+1] * v00[iz+1] + dp3d0[iz] * v00[iz]) * denom;
               v_i1[iz+1] = (dp3d0[iz+1] * v01[iz+1] + dp3d0[iz] * v01[iz]) * denom;
               dpnh_dp_i[iz+1] = (pnh[iz+1] - pnh[iz]) / dp_i[iz+1];
+            });
+
+
+          // compute_accumulated_quantities
+
+          Real *const domega_p = &derived_omega_p(ie,ix,iy,0)[0];
+          Real *const dvn00 = &derived_vn0(ie,0,ix,iy,0)[0];
+          Real *const dvn01 = &derived_vn0(ie,1,ix,iy,0)[0];
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
+              domega_p[iz] += data_eta_ave_w * omega_p[iz];
+              dvn00[iz] += data_eta_ave_w * vdp0[iz];
+              dvn01[iz] += data_eta_ave_w * vdp1[iz];
             });
         });
     }
@@ -625,7 +640,7 @@ struct CaarFunctorImpl {
 
     KernelVariables kv(team, m_tu);
 
-#if 0
+#ifndef TREY
     // =========== EPOCH 1 =========== //
     compute_div_vdp(kv);
 
@@ -640,6 +655,17 @@ struct CaarFunctorImpl {
       kv.team_barrier();
       compute_interface_quantities(kv);
     }
+
+    if (m_rsplit==0) {
+      assert(false);
+      // ============= EPOCH 2.2 ============ //
+      kv.team_barrier();
+      compute_vertical_advection(kv);
+    }
+
+    // ============= EPOCH 3 ============== //
+    kv.team_barrier();
+    compute_accumulated_quantities(kv);
 #endif
 
 #if 1
@@ -650,27 +676,16 @@ struct CaarFunctorImpl {
         const int igp = idx / NP;
         const int jgp = idx % NP;
         Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team,NUM_LEV_P),
+          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d %d dp %g v %g %g nh %g\n",
+            printf("TREY %d %d %d %d %d op %g vn0 %g %g\n",
                    m_data.n0,kv.ie,igp,jgp,ilev,
-                   m_buffers.dp_i(kv.ie,igp,jgp,ilev)[0],
-                   m_buffers.v_i(kv.ie,0,igp,jgp,ilev)[0],
-                   m_buffers.v_i(kv.ie,1,igp,jgp,ilev)[0],
-                   m_buffers.dpnh_dp_i(kv.ie,igp,jgp,ilev)[0]);
+                   m_derived.m_omega_p(kv.ie,igp,jgp,ilev)[0],
+                   m_derived.m_vn0(kv.ie,0,igp,jgp,ilev)[0],
+                   m_derived.m_vn0(kv.ie,1,igp,jgp,ilev)[0]);
           });
       });
 #endif
-
-    if (m_rsplit==0) {
-      // ============= EPOCH 2.2 ============ //
-      kv.team_barrier();
-      compute_vertical_advection(kv);
-    }
-
-    // ============= EPOCH 3 ============== //
-    kv.team_barrier();
-    compute_accumulated_quantities(kv);
 
     // Compute update quantities
     if (!m_theta_hydrostatic_mode) {
