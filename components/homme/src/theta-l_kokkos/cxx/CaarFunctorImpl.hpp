@@ -837,7 +837,24 @@ struct CaarFunctorImpl {
               theta_tens[iz] *= -scale1_dt_spheremp;
               vtheta_np1[iz] = vtheta_nm1[iz] * scale3_spheremp + theta_tens[iz];
             });
-           
+
+          // compute_v_np1
+
+          const Real *const v0_nm1 = &state_v(ie,data_nm1,0,ix,iy,0)[0];
+          const Real *const v1_nm1 = &state_v(ie,data_nm1,1,ix,iy,0)[0];
+
+          Real *const v0_np1 = &state_v(ie,data_np1,0,ix,iy,0)[0];
+          Real *const v1_np1 = &state_v(ie,data_np1,1,ix,iy,0)[0];
+          
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
+              v_tens0[iz] *= -scale1_dt_spheremp;
+              v0_np1[iz] = v0_nm1[iz] * scale3_spheremp + v_tens0[iz];
+              v_tens1[iz] *= -scale1_dt_spheremp;
+              v1_np1[iz] = v1_nm1[iz] * scale3_spheremp + v_tens1[iz];
+            });
+
         });
     }
 #endif
@@ -926,6 +943,11 @@ struct CaarFunctorImpl {
       compute_w_and_phi_np1(kv);
     }
     compute_dp3d_and_theta_np1(kv);
+
+    // ============= EPOCH 5 =========== //
+    // v_tens has been computed after last barrier. Need to make sure it's done
+    kv.team_barrier();
+    compute_v_np1(kv);
 #endif
 
 #if 1
@@ -938,20 +960,15 @@ struct CaarFunctorImpl {
         Kokkos::parallel_for(
           Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d %d dpt %g dp %g tt %g vt %g\n",
+            printf("TREY %d %d %d %d %d u %g %g ut %g %g\n",
                    m_data.np1,kv.ie,igp,jgp,ilev,
-                   m_buffers.dp_tens(kv.ie,igp,jgp,ilev)[0],
-                   m_state.m_dp3d(kv.ie,m_data.np1,igp,jgp,ilev)[0],
-                   m_buffers.theta_tens(kv.ie,igp,jgp,ilev)[0],
-                   m_state.m_vtheta_dp(kv.ie,m_data.np1,igp,jgp,ilev)[0]);
+                   m_state.m_v(kv.ie,m_data.np1,0,igp,jgp,ilev)[0],
+                   m_state.m_v(kv.ie,m_data.np1,1,igp,jgp,ilev)[0],
+                   m_buffers.v_tens(kv.ie,0,igp,jgp,ilev)[0],
+                   m_buffers.v_tens(kv.ie,1,igp,jgp,ilev)[0]);
           });
       });
 #endif
-
-    // ============= EPOCH 5 =========== //
-    // v_tens has been computed after last barrier. Need to make sure it's done
-    kv.team_barrier();
-    compute_v_np1(kv);
 
 #if 0
     kv.team_barrier();
