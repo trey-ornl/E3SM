@@ -406,6 +406,7 @@ struct CaarFunctorImpl {
       const Real gscale1 = PhysicalConstants::g * m_data.scale1;
       const Real gscale2 = PhysicalConstants::g * m_data.scale2;
       const Real pi_i00 = m_hvcoord.ps0*m_hvcoord.hybrid_ai0;
+      const Real scale1_dt = m_data.scale1 * m_data.dt;
 
       Kokkos::parallel_for(
         "caar loop pre-boundary exchange lambda",
@@ -817,7 +818,26 @@ struct CaarFunctorImpl {
               phi_tens[iz] *= dt_spheremp;
               phi_np1[iz] = phi_nm1[iz] * scale3_spheremp + phi_tens[iz];
             });
-             
+
+          // compute_dp3d_and_theta_np1
+
+          const Real *const dp_nm1 = &state_dp3d(ie,data_nm1,ix,iy,0)[0];
+          Real *const dp_np1 = &state_dp3d(ie,data_np1,ix,iy,0)[0];
+          const Real *const vtheta_nm1 = &state_vtheta_dp(ie,data_nm1,ix,iy,0)[0];
+          Real *const vtheta_np1 = &state_vtheta_dp(ie,data_np1,ix,iy,0)[0];
+          const Real scale1_dt_spheremp = scale1_dt * spheremp;
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
+
+              dp_tens[iz] *= scale1_dt_spheremp;
+              dp_np1[iz] = scale3_spheremp * dp_nm1[iz] - dp_tens[iz];
+
+              theta_tens[iz] *= -scale1_dt_spheremp;
+              vtheta_np1[iz] = vtheta_nm1[iz] * scale3_spheremp + theta_tens[iz];
+            });
+           
         });
     }
 #endif
@@ -905,7 +925,9 @@ struct CaarFunctorImpl {
     if (!m_theta_hydrostatic_mode) {
       compute_w_and_phi_np1(kv);
     }
+    compute_dp3d_and_theta_np1(kv);
 #endif
+
 #if 1
     kv.team_barrier();
     Kokkos::parallel_for(
@@ -914,19 +936,17 @@ struct CaarFunctorImpl {
         const int igp = idx / NP;
         const int jgp = idx % NP;
         Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team,NUM_LEV_P),
+          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d %d wt %g w %g pt %g p %g\n",
+            printf("TREY %d %d %d %d %d dpt %g dp %g tt %g vt %g\n",
                    m_data.np1,kv.ie,igp,jgp,ilev,
-                   m_buffers.w_tens(kv.ie,igp,jgp,ilev)[0],
-                   m_state.m_w_i(kv.ie,m_data.np1,igp,jgp,ilev)[0],
-                   m_buffers.phi_tens(kv.ie,igp,jgp,ilev)[0],
-                   m_state.m_phinh_i(kv.ie,m_data.np1,igp,jgp,ilev)[0]);
+                   m_buffers.dp_tens(kv.ie,igp,jgp,ilev)[0],
+                   m_state.m_dp3d(kv.ie,m_data.np1,igp,jgp,ilev)[0],
+                   m_buffers.theta_tens(kv.ie,igp,jgp,ilev)[0],
+                   m_state.m_vtheta_dp(kv.ie,m_data.np1,igp,jgp,ilev)[0]);
           });
       });
 #endif
-
-    compute_dp3d_and_theta_np1(kv);
 
     // ============= EPOCH 5 =========== //
     // v_tens has been computed after last barrier. Need to make sure it's done
@@ -944,7 +964,7 @@ struct CaarFunctorImpl {
           Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
           [&](const int ilev) {
             printf("TREY %d %d %d %d %d %d w_i %g phnh_i %g dp3d %g vtheta_dp %g v %g %g\n",
-                   m_data.n0,kv.ie,m_data.np1,igp,jgp,ilev,
+                   m_data.np1,kv.ie,m_data.np1,igp,jgp,ilev,
                    m_state.m_w_i(kv.ie,m_data.np1,igp,jgp,ilev)[0],
                    m_state.m_phinh_i(kv.ie,m_data.np1,igp,jgp,ilev)[0],
                    m_state.m_dp3d(kv.ie,m_data.np1,igp,jgp,ilev)[0],
