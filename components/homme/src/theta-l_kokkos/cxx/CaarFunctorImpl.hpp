@@ -791,6 +791,32 @@ struct CaarFunctorImpl {
 
               team.team_barrier();
             });
+
+          // compute_w_and_phi_np1
+
+          const Real spheremp = geometry_spheremp(ie,ix,iy);
+          const Real dt_spheremp = data_dt * spheremp;
+          const Real scale3_spheremp = data_scale3 * spheremp;
+
+          const Real *const w_nm1 = &state_w_i(ie,data_nm1,ix,iy,0)[0];
+          Real *const w_np1 = &state_w_i(ie,data_np1,ix,iy,0)[0];
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV_P),
+            [&](const int iz) {
+              w_tens[iz] *= dt_spheremp;
+              w_np1[iz] = w_nm1[iz] * scale3_spheremp + w_tens[iz];
+            });
+
+          const Real *const phi_nm1 = &state_phinh_i(ie,data_nm1,ix,iy,0)[0];
+          Real *const phi_np1 = &state_phinh_i(ie,data_np1,ix,iy,0)[0];
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
+              phi_tens[iz] *= dt_spheremp;
+              phi_np1[iz] = phi_nm1[iz] * scale3_spheremp + phi_tens[iz];
+            });
              
         });
     }
@@ -874,8 +900,12 @@ struct CaarFunctorImpl {
     // compute_v_tens reuses some buffers used by compute_dp_and_theta_tens 
     kv.team_barrier();
     compute_v_tens (kv);
-#endif
 
+    // Update states
+    if (!m_theta_hydrostatic_mode) {
+      compute_w_and_phi_np1(kv);
+    }
+#endif
 #if 1
     kv.team_barrier();
     Kokkos::parallel_for(
@@ -884,23 +914,18 @@ struct CaarFunctorImpl {
         const int igp = idx / NP;
         const int jgp = idx % NP;
         Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
+          Kokkos::ThreadVectorRange(kv.team,NUM_LEV_P),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d %d vo %g wv %g %g vt %g %g\n",
-                   m_data.n0,kv.ie,igp,jgp,ilev,
-                   m_buffers.vort(kv.ie,igp,jgp,ilev)[0],
-                   m_buffers.vdp(kv.ie,0,igp,jgp,ilev)[0],
-                   m_buffers.vdp(kv.ie,1,igp,jgp,ilev)[0],
-                   m_buffers.v_tens(kv.ie,0,igp,jgp,ilev)[0],
-                   m_buffers.v_tens(kv.ie,1,igp,jgp,ilev)[0]);
+            printf("TREY %d %d %d %d %d wt %g w %g pt %g p %g\n",
+                   m_data.np1,kv.ie,igp,jgp,ilev,
+                   m_buffers.w_tens(kv.ie,igp,jgp,ilev)[0],
+                   m_state.m_w_i(kv.ie,m_data.np1,igp,jgp,ilev)[0],
+                   m_buffers.phi_tens(kv.ie,igp,jgp,ilev)[0],
+                   m_state.m_phinh_i(kv.ie,m_data.np1,igp,jgp,ilev)[0]);
           });
       });
 #endif
 
-    // Update states
-    if (!m_theta_hydrostatic_mode) {
-      compute_w_and_phi_np1(kv);
-    }
     compute_dp3d_and_theta_np1(kv);
 
     // ============= EPOCH 5 =========== //
@@ -1538,22 +1563,19 @@ struct CaarFunctorImpl {
                            [&](const int ilev) {
 
         // Add w_tens to w_nm1 and multiply by spheremp
-#if 1
-        //w_tens(ilev) *= m_data.dt*spheremp;
+        w_tens(ilev) *= m_data.dt*spheremp;
         w_np1(ilev) = m_state.m_w_i(kv.ie,m_data.nm1,igp,jgp,ilev);
         w_np1(ilev) *= m_data.scale3*spheremp;
         w_np1(ilev) += w_tens(ilev);
-#endif
 
         // Add phi_tens to phi_nm1 and multiply by spheremp
         // temp *= m_data.dt*spheremp;
-        //phi_tens(ilev) *= m_data.dt*spheremp;
+        phi_tens(ilev) *= m_data.dt*spheremp;
         phi_np1(ilev) = m_state.m_phinh_i(kv.ie,m_data.nm1,igp,jgp,ilev);
         phi_np1(ilev) *= m_data.scale3*spheremp;
         phi_np1(ilev) += phi_tens(ilev);
       });
 
-#if 1
       // Last interface only for w, not phi (since phi=phis there)
       Kokkos::single(Kokkos::PerThread(kv.team),[&](){
         using Info = ColInfo<NUM_INTERFACE_LEV>;
@@ -1567,13 +1589,12 @@ struct CaarFunctorImpl {
           phi_np1(ilev)[ivec] = m_geometry.m_phis(kv.ie,igp,jgp);
         } else {
           // We didn't do anything on last interface, so update w
-          //w_tens(ilev)[ivec] *= m_data.dt*spheremp;
+          w_tens(ilev)[ivec] *= m_data.dt*spheremp;
           w_np1(ilev)[ivec]  = m_state.m_w_i(kv.ie,m_data.nm1,igp,jgp,ilev)[ivec];
           w_np1(ilev)[ivec] *= m_data.scale3*spheremp;
           w_np1(ilev)[ivec] += w_tens(ilev)[ivec];
         }
       });
-#endif
     });
   }
 
