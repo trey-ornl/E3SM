@@ -960,26 +960,6 @@ struct CaarFunctorImpl {
         Kokkos::parallel_for(
           Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d %d u %g %g ut %g %g\n",
-                   m_data.np1,kv.ie,igp,jgp,ilev,
-                   m_state.m_v(kv.ie,m_data.np1,0,igp,jgp,ilev)[0],
-                   m_state.m_v(kv.ie,m_data.np1,1,igp,jgp,ilev)[0],
-                   m_buffers.v_tens(kv.ie,0,igp,jgp,ilev)[0],
-                   m_buffers.v_tens(kv.ie,1,igp,jgp,ilev)[0]);
-          });
-      });
-#endif
-
-#if 0
-    kv.team_barrier();
-    Kokkos::parallel_for(
-      Kokkos::TeamThreadRange(kv.team,NP*NP),
-      [&](const int idx) {
-        const int igp = idx / NP;
-        const int jgp = idx % NP;
-        Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
-          [&](const int ilev) {
             printf("TREY %d %d %d %d %d %d w_i %g phnh_i %g dp3d %g vtheta_dp %g v %g %g\n",
                    m_data.np1,kv.ie,m_data.np1,igp,jgp,ilev,
                    m_state.m_w_i(kv.ie,m_data.np1,igp,jgp,ilev)[0],
