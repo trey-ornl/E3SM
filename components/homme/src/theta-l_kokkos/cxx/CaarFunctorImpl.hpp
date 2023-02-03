@@ -685,6 +685,113 @@ struct CaarFunctorImpl {
 
               team.team_barrier();
             });
+
+          // compute_v_tens
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV_P),
+            [&](const int iz) {
+
+              double w0 = 0;
+              double w1 = 0;
+              for (int j = 0; j < NP; j++) {
+                const int iyj = iy * NP + j;
+                const int ixjz = (ix * NP + j) * NUM_LEV_P + iz;
+                w0 += dvv[iyj] * w_i00[ixjz];
+                const int ixj = ix * NP + j;
+                const int ijyz = (j * NP + iy) * NUM_LEV_P + iz;
+                w1 += dvv[ixj] * w_i00[ijyz];
+              }
+              w0 *= sphere_rrearth;
+              w1 *= sphere_rrearth;
+              v_i0[iz] = dinv00 * w0 + dinv01 * w1;
+              v_i1[iz] = dinv10 * w0 + dinv11 * w1;
+            });
+
+          const Real *const d = &sphere_d(ie,0,0,ix,iy);
+          const Real d00 = d[0];
+          const Real d01 = d[NPNP];
+          const Real d10 = d[2*NPNP];
+          const Real d11 = d[3*NPNP];
+          const Real fcor = geometry_fcor(ie,ix,iy);
+
+          Real *const v_tens0 = &buffers_v_tens(ie,0,ix,iy,0)[0];
+          Real *const v_tens1 = &buffers_v_tens(ie,1,ix,iy,0)[0];
+          Real *const vort = &buffers_vort(ie,ix,iy,0)[0];
+          Real *const temp = &buffers_temp(ie,ix,iy,0)[0];
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
+
+              ttmp0[ix * NP + iy] = d00 * v00[iz] + d01 * v01[iz];
+              ttmp1[ix * NP + iy] = d10 * v00[iz] + d11 * v01[iz];
+
+              team.team_barrier();
+
+              Real dvmdu = 0;
+              for (int j = 0; j < NP; j++) {
+                dvmdu += dvv[iy * NP + j] * ttmp1[ix * NP + j] - dvv[ix * NP + j] * ttmp0[j * NP + iy];
+              }
+              vort[iz] = dvmdu * rrdmd + fcor;
+
+              team.team_barrier();
+
+              temp[iz] = ttmp0[ix * NP + iy] = 0.5 * (v00[iz] * v00[iz] + v01[iz] * v01[iz]);
+
+              ttmp1[ix * NP + iy] = 0.25 * (w_i0[iz] * w_i0[iz] + w_i0[iz+1] * w_i0[iz + 1]);
+
+              team.team_barrier();
+
+              Real s0 = 0;
+              Real s1 = 0;
+              Real t0 = 0;
+              Real t1 = 0;
+              for (int j = 0; j < NP; j++) {
+                s0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
+                t0 += dvv[iy * NP + j] * ttmp1[ix * NP + j];
+                s1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
+                t1 += dvv[ix * NP + j] * ttmp1[j * NP + iy];
+              }
+
+              s0 *= sphere_rrearth;
+              s1 *= sphere_rrearth;
+              v_tens0[iz] = dinv00 * s0 + dinv01 * s1;
+              v_tens1[iz] = dinv10 * s0 + dinv11 * s1;
+
+              t0 *= sphere_rrearth;
+              t1 *= sphere_rrearth;
+              vdp0[iz] = dinv00 * t0 + dinv01 * t1;
+              vdp1[iz] = dinv10 * t0 + dinv11 * t1;
+              vdp0[iz] -= 0.5 * (v_i0[iz] * w_i0[iz] + v_i0[iz+1] * w_i0[iz+1]);
+              vdp1[iz] -= 0.5 * (v_i1[iz] * w_i0[iz] + v_i1[iz+1] * w_i0[iz+1]);
+              vdp0[iz] += 0.5 * (grad_phinh_i0[iz] * dpnh_dp_i[iz] + grad_phinh_i0[iz+1] * dpnh_dp_i[iz+1]);
+              vdp1[iz] += 0.5 * (grad_phinh_i1[iz] * dpnh_dp_i[iz] + grad_phinh_i1[iz+1] * dpnh_dp_i[iz+1]);
+
+              team.team_barrier();
+
+              ttmp0[ix * NP + iy] = exner[iz];
+
+              team.team_barrier();
+
+              t0 = t1 = 0;
+              for (int j = 0; j < NP; j++) {
+                t0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
+                t1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
+              }
+              t0 *= sphere_rrearth;
+              t1 *= sphere_rrearth;
+              grad_tmp0[iz] = dinv00 * t0 + dinv01 * t1;
+              grad_tmp1[iz] = dinv10 * t0 + dinv11 * t1;
+
+              const double vtheta = vtheta_dp0[iz] / dp3d0[iz];
+              const double cp_vtheta = PhysicalConstants::cp * vtheta;
+              v_tens0[iz] += cp_vtheta * grad_tmp0[iz] + vdp0[iz] - v01[iz] * vort[iz];
+              v_tens1[iz] += cp_vtheta * grad_tmp1[iz] + vdp1[iz] + v00[iz] * vort[iz];
+
+              team.team_barrier();
+            });
+             
         });
     }
 #endif
@@ -763,6 +870,10 @@ struct CaarFunctorImpl {
     }
     compute_dp_and_theta_tens (kv);
 
+    // ============= EPOCH 4 =========== //
+    // compute_v_tens reuses some buffers used by compute_dp_and_theta_tens 
+    kv.team_barrier();
+    compute_v_tens (kv);
 #endif
 
 #if 1
@@ -775,18 +886,16 @@ struct CaarFunctorImpl {
         Kokkos::parallel_for(
           Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d %d dpt %g thetat %g\n",
+            printf("TREY %d %d %d %d %d vo %g wv %g %g vt %g %g\n",
                    m_data.n0,kv.ie,igp,jgp,ilev,
-                   m_buffers.dp_tens(kv.ie,igp,jgp,ilev)[0],
-                   m_buffers.theta_tens(kv.ie,igp,jgp,ilev)[0]);
+                   m_buffers.vort(kv.ie,igp,jgp,ilev)[0],
+                   m_buffers.vdp(kv.ie,0,igp,jgp,ilev)[0],
+                   m_buffers.vdp(kv.ie,1,igp,jgp,ilev)[0],
+                   m_buffers.v_tens(kv.ie,0,igp,jgp,ilev)[0],
+                   m_buffers.v_tens(kv.ie,1,igp,jgp,ilev)[0]);
           });
       });
 #endif
-
-    // ============= EPOCH 4 =========== //
-    // compute_v_tens reuses some buffers used by compute_dp_and_theta_tens 
-    kv.team_barrier();
-    compute_v_tens (kv);
 
     // Update states
     if (!m_theta_hydrostatic_mode) {
@@ -1628,7 +1737,6 @@ struct CaarFunctorImpl {
       // Compute grad(average(w^2/2))
       m_sphere_ops.gradient_sphere(kv, Homme::subview(m_buffers.temp,kv.team_idx),
                                        wvor);
-
       // Compute grad(w)
       m_sphere_ops.gradient_sphere(kv, Homme::subview(m_state.m_w_i,kv.ie,m_data.n0),
                                        Homme::subview(m_buffers.v_i,kv.team_idx));
