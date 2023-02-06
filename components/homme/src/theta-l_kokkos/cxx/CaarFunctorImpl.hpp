@@ -499,8 +499,6 @@ struct CaarFunctorImpl {
 
           Real *const pi = &buffers_pi(ie,ix,iy,0)[0];
           Real *const omega_p = &buffers_omega_p(ie,ix,iy,0)[0];
-          Real *const grad_tmp0 = &buffers_grad_tmp(ie,0,ix,iy,0)[0];
-          Real *const grad_tmp1 = &buffers_grad_tmp(ie,1,ix,iy,0)[0];
 
           const Real *const vtheta_dp0 = &state_vtheta_dp(ie,data_n0,ix,iy,0)[0];
           const Real *const phinh_i0 = &state_phinh_i(ie,data_n0,ix,iy,0)[0];
@@ -526,10 +524,10 @@ struct CaarFunctorImpl {
               }
               d0 *= sphere_rrearth;
               d1 *= sphere_rrearth;
-              grad_tmp0[iz] = dinv00 * d0 + dinv01 * d1;
-              grad_tmp1[iz] = dinv10 * d0 + dinv11 * d1;
+              const Real grad_tmp0 = dinv00 * d0 + dinv01 * d1;
+              const Real grad_tmp1 = dinv10 * d0 + dinv11 * d1;
 
-              omega_p[iz] += v00[iz] * grad_tmp0[iz] + v01[iz] * grad_tmp1[iz];
+              omega_p[iz] += v00[iz] * grad_tmp0 + v01[iz] * grad_tmp1;
 
               phi[iz] = 0.5 * (phinh_i0[iz+1] + phinh_i0[iz]);
               const Real dphi = phinh_i0[iz+1] - phinh_i0[iz];
@@ -675,13 +673,13 @@ struct CaarFunctorImpl {
               }
               t0 *= sphere_rrearth;
               t1 *= sphere_rrearth;
-              grad_tmp0[iz] = dinv00 * t0 + dinv01 * t1;
-              grad_tmp1[iz] = dinv10 * t0 + dinv11 * t1;
+              const Real grad_tmp0 = dinv00 * t0 + dinv01 * t1;
+              const Real grad_tmp1 = dinv10 * t0 + dinv11 * t1;
 
               dp_tens[iz] = div_vdp[iz];
 
               Real tt = div_vdp[iz] * ttmp0[ix * NP + iy];
-              tt += grad_tmp0[iz] * vdp0[iz] + grad_tmp1[iz] * vdp1[iz];
+              tt += grad_tmp0 * vdp0[iz] + grad_tmp1 * vdp1[iz];
               theta_tens[iz] = tt;
 
               team.team_barrier();
@@ -782,13 +780,13 @@ struct CaarFunctorImpl {
               }
               t0 *= sphere_rrearth;
               t1 *= sphere_rrearth;
-              grad_tmp0[iz] = dinv00 * t0 + dinv01 * t1;
-              grad_tmp1[iz] = dinv10 * t0 + dinv11 * t1;
+              const Real grad_tmp0 = dinv00 * t0 + dinv01 * t1;
+              const Real grad_tmp1 = dinv10 * t0 + dinv11 * t1;
 
               const double vtheta = vtheta_dp0[iz] / dp3d0[iz];
               const double cp_vtheta = PhysicalConstants::cp * vtheta;
-              v_tens0[iz] += cp_vtheta * grad_tmp0[iz] + vdp0[iz] - v01[iz] * vort[iz];
-              v_tens1[iz] += cp_vtheta * grad_tmp1[iz] + vdp1[iz] + v00[iz] * vort[iz];
+              v_tens0[iz] += cp_vtheta * grad_tmp0 + vdp0[iz] - v01[iz] * vort[iz];
+              v_tens1[iz] += cp_vtheta * grad_tmp1 + vdp1[iz] + v00[iz] * vort[iz];
 
               team.team_barrier();
             });
