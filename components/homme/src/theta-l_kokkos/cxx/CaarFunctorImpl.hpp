@@ -606,10 +606,15 @@ struct CaarFunctorImpl {
           Real *const grad_w_i0 = &buffers_grad_w_i(ie,0,ix,iy,0)[0];
           Real *const grad_w_i1 = &buffers_grad_w_i(ie,1,ix,iy,0)[0];
           Real *const phi_tens = &buffers_phi_tens(ie,ix,iy,0)[0];
-          Real *const w_tens = &buffers_w_tens(ie,ix,iy,0)[0];
+
+          const Real *const w_nm1 = &state_w_i(ie,data_nm1,ix,iy,0)[0];
+          Real *const w_np1 = &state_w_i(ie,data_np1,ix,iy,0)[0];
 
           const Real gradphis0 = geometry_gradphis(ie,0,ix,iy);
           const Real gradphis1 = geometry_gradphis(ie,1,ix,iy);
+          const Real spheremp = geometry_spheremp(ie,ix,iy);
+          const Real dt_spheremp = data_dt * spheremp;
+          const Real scale3_spheremp = data_scale3 * spheremp;
 
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV_P),
@@ -642,7 +647,8 @@ struct CaarFunctorImpl {
               wt *= -data_scale1;
               const Real scale = (iz == NUM_LEV) ? gscale1 : gscale2;
               wt += (dpnh_dp_i[iz] - 1.0) * scale;
-              w_tens[iz] = wt;
+              wt *= dt_spheremp;
+              w_np1[iz] = w_nm1[iz] * scale3_spheremp + wt;
 
               Real pt = v_i0[iz] * grad_phinh_i0[iz] + v_i1[iz] * grad_phinh_i1[iz];
               pt *= -data_scale1;
@@ -713,11 +719,16 @@ struct CaarFunctorImpl {
           const Real d10 = d[2*NPNP];
           const Real d11 = d[3*NPNP];
           const Real fcor = geometry_fcor(ie,ix,iy);
+          const Real scale1_dt_spheremp = scale1_dt * spheremp;
 
-          Real *const v_tens0 = &buffers_v_tens(ie,0,ix,iy,0)[0];
-          Real *const v_tens1 = &buffers_v_tens(ie,1,ix,iy,0)[0];
           Real *const vort = &buffers_vort(ie,ix,iy,0)[0];
           Real *const temp = &buffers_temp(ie,ix,iy,0)[0];
+
+          const Real *const v0_nm1 = &state_v(ie,data_nm1,0,ix,iy,0)[0];
+          const Real *const v1_nm1 = &state_v(ie,data_nm1,1,ix,iy,0)[0];
+
+          Real *const v0_np1 = &state_v(ie,data_np1,0,ix,iy,0)[0];
+          Real *const v1_np1 = &state_v(ie,data_np1,1,ix,iy,0)[0];
 
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
@@ -755,8 +766,8 @@ struct CaarFunctorImpl {
 
               s0 *= sphere_rrearth;
               s1 *= sphere_rrearth;
-              v_tens0[iz] = dinv00 * s0 + dinv01 * s1;
-              v_tens1[iz] = dinv10 * s0 + dinv11 * s1;
+              Real v_tens0 = dinv00 * s0 + dinv01 * s1;
+              Real v_tens1 = dinv10 * s0 + dinv11 * s1;
 
               t0 *= sphere_rrearth;
               t1 *= sphere_rrearth;
@@ -785,27 +796,18 @@ struct CaarFunctorImpl {
 
               const double vtheta = vtheta_dp0[iz] / dp3d0[iz];
               const double cp_vtheta = PhysicalConstants::cp * vtheta;
-              v_tens0[iz] += cp_vtheta * grad_tmp0 + vdp0[iz] - v01[iz] * vort[iz];
-              v_tens1[iz] += cp_vtheta * grad_tmp1 + vdp1[iz] + v00[iz] * vort[iz];
+              v_tens0 += cp_vtheta * grad_tmp0 + vdp0[iz] - v01[iz] * vort[iz];
+              v_tens1 += cp_vtheta * grad_tmp1 + vdp1[iz] + v00[iz] * vort[iz];
+
+              v_tens0 *= -scale1_dt_spheremp;
+              v0_np1[iz] = v0_nm1[iz] * scale3_spheremp + v_tens0;
+              v_tens1 *= -scale1_dt_spheremp;
+              v1_np1[iz] = v1_nm1[iz] * scale3_spheremp + v_tens1;
 
               team.team_barrier();
             });
 
           // compute_w_and_phi_np1
-
-          const Real spheremp = geometry_spheremp(ie,ix,iy);
-          const Real dt_spheremp = data_dt * spheremp;
-          const Real scale3_spheremp = data_scale3 * spheremp;
-
-          const Real *const w_nm1 = &state_w_i(ie,data_nm1,ix,iy,0)[0];
-          Real *const w_np1 = &state_w_i(ie,data_np1,ix,iy,0)[0];
-
-          Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(team, NUM_LEV_P),
-            [&](const int iz) {
-              w_tens[iz] *= dt_spheremp;
-              w_np1[iz] = w_nm1[iz] * scale3_spheremp + w_tens[iz];
-            });
 
           const Real *const phi_nm1 = &state_phinh_i(ie,data_nm1,ix,iy,0)[0];
           Real *const phi_np1 = &state_phinh_i(ie,data_np1,ix,iy,0)[0];
@@ -823,7 +825,6 @@ struct CaarFunctorImpl {
           Real *const dp_np1 = &state_dp3d(ie,data_np1,ix,iy,0)[0];
           const Real *const vtheta_nm1 = &state_vtheta_dp(ie,data_nm1,ix,iy,0)[0];
           Real *const vtheta_np1 = &state_vtheta_dp(ie,data_np1,ix,iy,0)[0];
-          const Real scale1_dt_spheremp = scale1_dt * spheremp;
 
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
@@ -834,23 +835,6 @@ struct CaarFunctorImpl {
 
               theta_tens[iz] *= -scale1_dt_spheremp;
               vtheta_np1[iz] = vtheta_nm1[iz] * scale3_spheremp + theta_tens[iz];
-            });
-
-          // compute_v_np1
-
-          const Real *const v0_nm1 = &state_v(ie,data_nm1,0,ix,iy,0)[0];
-          const Real *const v1_nm1 = &state_v(ie,data_nm1,1,ix,iy,0)[0];
-
-          Real *const v0_np1 = &state_v(ie,data_np1,0,ix,iy,0)[0];
-          Real *const v1_np1 = &state_v(ie,data_np1,1,ix,iy,0)[0];
-          
-          Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(team, NUM_LEV),
-            [&](const int iz) {
-              v_tens0[iz] *= -scale1_dt_spheremp;
-              v0_np1[iz] = v0_nm1[iz] * scale3_spheremp + v_tens0[iz];
-              v_tens1[iz] *= -scale1_dt_spheremp;
-              v1_np1[iz] = v1_nm1[iz] * scale3_spheremp + v_tens1[iz];
             });
 
         });
