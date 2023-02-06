@@ -503,7 +503,6 @@ struct CaarFunctorImpl {
           const Real *const phinh_i0 = &state_phinh_i(ie,data_n0,ix,iy,0)[0];
 
           Real *const exner = &buffers_exner(ie,ix,iy,0)[0];
-          Real *const phi = &buffers_phi(ie,ix,iy,0)[0];
           Real *const pnh = &buffers_pnh(ie,ix,iy,0)[0];
 
           Kokkos::parallel_for(
@@ -528,7 +527,6 @@ struct CaarFunctorImpl {
               omega_p += v00[iz] * grad_tmp0 + v01[iz] * grad_tmp1;
               domega_p[iz] += data_eta_ave_w * omega_p;
 
-              phi[iz] = 0.5 * (phinh_i0[iz+1] + phinh_i0[iz]);
               const Real dphi = phinh_i0[iz+1] - phinh_i0[iz];
               if ((vtheta_dp0[iz] < 0) || (dphi > 0)) abort();
 
@@ -600,8 +598,6 @@ struct CaarFunctorImpl {
 
           Real *const grad_phinh_i0 = &buffers_grad_phinh_i(ie,0,ix,iy,0)[0];
           Real *const grad_phinh_i1 = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
-          Real *const grad_w_i0 = &buffers_grad_w_i(ie,0,ix,iy,0)[0];
-          Real *const grad_w_i1 = &buffers_grad_w_i(ie,1,ix,iy,0)[0];
           Real *const phi_tens = &buffers_phi_tens(ie,ix,iy,0)[0];
 
           const Real *const w_nm1 = &state_w_i(ie,data_nm1,ix,iy,0)[0];
@@ -631,22 +627,22 @@ struct CaarFunctorImpl {
                 p1 += dvv[ixj] * phinh_i00[ijyz];
                 w1 += dvv[ixj] * w_i00[ijyz];
               }
-              p0 *= sphere_rrearth;
-              p1 *= sphere_rrearth;
               w0 *= sphere_rrearth;
               w1 *= sphere_rrearth;
-              grad_phinh_i0[iz] = dinv00 * p0 + dinv01 * p1;
-              grad_phinh_i1[iz] = dinv10 * p0 + dinv11 * p1;
-              grad_w_i0[iz] = dinv00 * w0 + dinv01 * w1;
-              grad_w_i1[iz] = dinv10 * w0 + dinv11 * w1;
+              const Real grad_w_i0 = dinv00 * w0 + dinv01 * w1;
+              const Real grad_w_i1 = dinv10 * w0 + dinv11 * w1;
 
-              Real wt = v_i0[iz] * grad_w_i0[iz] + v_i1[iz] * grad_w_i1[iz];
+              Real wt = v_i0[iz] * grad_w_i0 + v_i1[iz] * grad_w_i1;
               wt *= -data_scale1;
               const Real scale = (iz == NUM_LEV) ? gscale1 : gscale2;
               wt += (dpnh_dp_i[iz] - 1.0) * scale;
               wt *= dt_spheremp;
               w_np1[iz] = w_nm1[iz] * scale3_spheremp + wt;
 
+              p0 *= sphere_rrearth;
+              p1 *= sphere_rrearth;
+              grad_phinh_i0[iz] = dinv00 * p0 + dinv01 * p1;
+              grad_phinh_i1[iz] = dinv10 * p0 + dinv11 * p1;
               Real pt = v_i0[iz] * grad_phinh_i0[iz] + v_i1[iz] * grad_phinh_i1[iz];
               pt *= -data_scale1;
               pt += w_i0[iz] * gscale2;
