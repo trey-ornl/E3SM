@@ -497,8 +497,7 @@ struct CaarFunctorImpl {
 
           team.team_barrier();
 
-          Real *const pi = &buffers_pi(ie,ix,iy,0)[0];
-          Real *const omega_p = &buffers_omega_p(ie,ix,iy,0)[0];
+          Real *const domega_p = &derived_omega_p(ie,ix,iy,0)[0];
 
           const Real *const vtheta_dp0 = &state_vtheta_dp(ie,data_n0,ix,iy,0)[0];
           const Real *const phinh_i0 = &state_phinh_i(ie,data_n0,ix,iy,0)[0];
@@ -510,9 +509,8 @@ struct CaarFunctorImpl {
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz) {
-              pi[iz] = 0.5 * (pi_i[iz] + pi_i[iz+1]);
-              omega_p[iz] = -0.5 * (omega_i[iz] + omega_i[iz+1]);
-              ttmp0[ix * NP + iy] = pi[iz];
+              Real omega_p = -0.5 * (omega_i[iz] + omega_i[iz+1]);
+              ttmp0[ix * NP + iy] = 0.5 * (pi_i[iz] + pi_i[iz+1]);
 
               team.team_barrier();
 
@@ -527,7 +525,8 @@ struct CaarFunctorImpl {
               const Real grad_tmp0 = dinv00 * d0 + dinv01 * d1;
               const Real grad_tmp1 = dinv10 * d0 + dinv11 * d1;
 
-              omega_p[iz] += v00[iz] * grad_tmp0 + v01[iz] * grad_tmp1;
+              omega_p += v00[iz] * grad_tmp0 + v01[iz] * grad_tmp1;
+              domega_p[iz] += data_eta_ave_w * omega_p;
 
               phi[iz] = 0.5 * (phinh_i0[iz+1] + phinh_i0[iz]);
               const Real dphi = phinh_i0[iz+1] - phinh_i0[iz];
@@ -581,14 +580,12 @@ struct CaarFunctorImpl {
 
           // compute_accumulated_quantities
 
-          Real *const domega_p = &derived_omega_p(ie,ix,iy,0)[0];
           Real *const dvn00 = &derived_vn0(ie,0,ix,iy,0)[0];
           Real *const dvn01 = &derived_vn0(ie,1,ix,iy,0)[0];
 
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz) {
-              domega_p[iz] += data_eta_ave_w * omega_p[iz];
               dvn00[iz] += data_eta_ave_w * vdp0[iz];
               dvn01[iz] += data_eta_ave_w * vdp1[iz];
             });
