@@ -652,8 +652,12 @@ struct CaarFunctorImpl {
 
           // compute_dp_and_theta_tens
 
-          Real *const dp_tens = &buffers_dp_tens(ie,ix,iy,0)[0];
-          Real *const theta_tens = &buffers_theta_tens(ie,ix,iy,0)[0];
+          const Real *const dp_nm1 = &state_dp3d(ie,data_nm1,ix,iy,0)[0];
+          Real *const dp_np1 = &state_dp3d(ie,data_np1,ix,iy,0)[0];
+          const Real *const vtheta_nm1 = &state_vtheta_dp(ie,data_nm1,ix,iy,0)[0];
+          Real *const vtheta_np1 = &state_vtheta_dp(ie,data_np1,ix,iy,0)[0];
+
+          const Real scale1_dt_spheremp = scale1_dt * spheremp;
 
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
@@ -675,11 +679,15 @@ struct CaarFunctorImpl {
               const Real grad_tmp0 = dinv00 * t0 + dinv01 * t1;
               const Real grad_tmp1 = dinv10 * t0 + dinv11 * t1;
 
-              dp_tens[iz] = div_vdp[iz];
+              Real dp_tens = div_vdp[iz];
 
-              Real tt = div_vdp[iz] * ttmp0[ix * NP + iy];
+              Real tt = dp_tens * ttmp0[ix * NP + iy];
               tt += grad_tmp0 * vdp0[iz] + grad_tmp1 * vdp1[iz];
-              theta_tens[iz] = tt;
+              tt *= -scale1_dt_spheremp;
+              vtheta_np1[iz] = vtheta_nm1[iz] * scale3_spheremp + tt;
+
+              dp_tens *= scale1_dt_spheremp;
+              dp_np1[iz] = scale3_spheremp * dp_nm1[iz] - dp_tens;
 
               team.team_barrier();
             });
@@ -712,7 +720,6 @@ struct CaarFunctorImpl {
           const Real d10 = d[2*NPNP];
           const Real d11 = d[3*NPNP];
           const Real fcor = geometry_fcor(ie,ix,iy);
-          const Real scale1_dt_spheremp = scale1_dt * spheremp;
 
           Real *const vort = &buffers_vort(ie,ix,iy,0)[0];
           Real *const temp = &buffers_temp(ie,ix,iy,0)[0];
@@ -810,24 +817,6 @@ struct CaarFunctorImpl {
             [&](const int iz) {
               phi_tens[iz] *= dt_spheremp;
               phi_np1[iz] = phi_nm1[iz] * scale3_spheremp + phi_tens[iz];
-            });
-
-          // compute_dp3d_and_theta_np1
-
-          const Real *const dp_nm1 = &state_dp3d(ie,data_nm1,ix,iy,0)[0];
-          Real *const dp_np1 = &state_dp3d(ie,data_np1,ix,iy,0)[0];
-          const Real *const vtheta_nm1 = &state_vtheta_dp(ie,data_nm1,ix,iy,0)[0];
-          Real *const vtheta_np1 = &state_vtheta_dp(ie,data_np1,ix,iy,0)[0];
-
-          Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(team, NUM_LEV),
-            [&](const int iz) {
-
-              dp_tens[iz] *= scale1_dt_spheremp;
-              dp_np1[iz] = scale3_spheremp * dp_nm1[iz] - dp_tens[iz];
-
-              theta_tens[iz] *= -scale1_dt_spheremp;
-              vtheta_np1[iz] = vtheta_nm1[iz] * scale3_spheremp + theta_tens[iz];
             });
 
         });
