@@ -335,7 +335,7 @@ struct CaarFunctorImpl {
 
     GPTLstart("caar compute");
 
-#define TREY
+//#define TREY
 #ifdef TREY
     if ((m_rsplit > 0) && (!m_theta_hydrostatic_mode) && (m_theta_advection_form == AdvectionForm::NonConservative)) {
 
@@ -905,11 +905,16 @@ struct CaarFunctorImpl {
         Kokkos::parallel_for(
           Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
           [&](const int ilev) {
-            printf("TREY %d %d %d %d %d %d w_i %g phnh_i %g dp3d %g vtheta_dp %g v %g %g\n",
-                   m_data.np1,kv.ie,m_data.np1,igp,jgp,ilev,
+            printf("TREY %d %d %d %d %d do %g dv %g %g dp %g\n",
+                   m_data.np1,kv.ie,igp,jgp,ilev,
+                   m_derived.m_omega_p(kv.ie,igp,jgp,ilev)[0],
+                   m_derived.m_vn0(kv.ie,0,igp,jgp,ilev)[0],
+                   m_derived.m_vn0(kv.ie,1,igp,jgp,ilev)[0],
+                   m_state.m_dp3d(kv.ie,m_data.np1,igp,jgp,ilev)[0]);
+            printf("TREY %d %d %d %d %d wi %g ph %g vt %g v %g %g\n",
+                   m_data.np1,kv.ie,igp,jgp,ilev,
                    m_state.m_w_i(kv.ie,m_data.np1,igp,jgp,ilev)[0],
                    m_state.m_phinh_i(kv.ie,m_data.np1,igp,jgp,ilev)[0],
-                   m_state.m_dp3d(kv.ie,m_data.np1,igp,jgp,ilev)[0],
                    m_state.m_vtheta_dp(kv.ie,m_data.np1,igp,jgp,ilev)[0],
                    m_state.m_v(kv.ie,m_data.np1,0,igp,jgp,ilev)[0],
                    m_state.m_v(kv.ie,m_data.np1,1,igp,jgp,ilev)[0]);
