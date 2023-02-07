@@ -560,10 +560,11 @@ struct CaarFunctorImpl {
 
           Real *const grad_phinh_i0 = &buffers_grad_phinh_i(ie,0,ix,iy,0)[0];
           Real *const grad_phinh_i1 = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
-          Real *const phi_tens = &buffers_phi_tens(ie,ix,iy,0)[0];
 
           const Real *const w_nm1 = &state_w_i(ie,data_nm1,ix,iy,0)[0];
           Real *const w_np1 = &state_w_i(ie,data_np1,ix,iy,0)[0];
+          const Real *const phi_nm1 = &state_phinh_i(ie,data_nm1,ix,iy,0)[0];
+          Real *const phi_np1 = &state_phinh_i(ie,data_np1,ix,iy,0)[0];
 
           const Real gradphis0 = geometry_gradphis(ie,0,ix,iy);
           const Real gradphis1 = geometry_gradphis(ie,1,ix,iy);
@@ -615,6 +616,7 @@ struct CaarFunctorImpl {
               const Real pnhiz = (iz < NUM_LEV) ? pnh[iz] : pnh[NUM_LEV-1] + 0.5 * dpizm1;
               const Real pnhizm1 = (iz > 0) ? pnh[iz-1] : pi_i00;
               dpnh_dp_i[iz] = 2.0 * (pnhiz - pnhizm1) * denom;
+
               Real wt = v_i0 * grad_w_i0 + v_i1 * grad_w_i1;
               wt *= -data_scale1;
               const Real scale = (iz == NUM_LEV) ? gscale1 : gscale2;
@@ -626,11 +628,15 @@ struct CaarFunctorImpl {
               p1 *= sphere_rrearth;
               grad_phinh_i0[iz] = dinv00 * p0 + dinv01 * p1;
               grad_phinh_i1[iz] = dinv10 * p0 + dinv11 * p1;
-              Real pt = v_i0 * grad_phinh_i0[iz] + v_i1 * grad_phinh_i1[iz];
-              pt *= -data_scale1;
-              pt += w_i0[iz] * gscale2;
-              pt += dscale * (v_i0 * gradphis0 + v_i1 * gradphis1) * hvcoord_hybrid_bi_packed[iz];
-              phi_tens[iz] = pt;
+
+              if (iz < NUM_LEV) {
+                Real pt = v_i0 * grad_phinh_i0[iz] + v_i1 * grad_phinh_i1[iz];
+                pt *= -data_scale1;
+                pt += w_i0[iz] * gscale2;
+                pt += dscale * (v_i0 * gradphis0 + v_i1 * gradphis1) * hvcoord_hybrid_bi_packed[iz];
+                pt *= dt_spheremp;
+                phi_np1[iz] = phi_nm1[iz] * scale3_spheremp + pt;
+              }
             });
 
           // compute_dp_and_theta_tens
@@ -794,19 +800,6 @@ struct CaarFunctorImpl {
 
               team.team_barrier();
             });
-
-          // compute_w_and_phi_np1
-
-          const Real *const phi_nm1 = &state_phinh_i(ie,data_nm1,ix,iy,0)[0];
-          Real *const phi_np1 = &state_phinh_i(ie,data_np1,ix,iy,0)[0];
-
-          Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(team, NUM_LEV),
-            [&](const int iz) {
-              phi_tens[iz] *= dt_spheremp;
-              phi_np1[iz] = phi_nm1[iz] * scale3_spheremp + phi_tens[iz];
-            });
-
         });
     }
 #endif
