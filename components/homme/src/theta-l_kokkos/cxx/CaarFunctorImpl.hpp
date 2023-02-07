@@ -719,8 +719,6 @@ struct CaarFunctorImpl {
           const Real d11 = d[3*NPNP];
           const Real fcor = geometry_fcor(ie,ix,iy);
 
-          Real *const vort = &buffers_vort(ie,ix,iy,0)[0];
-
           const Real *const v0_nm1 = &state_v(ie,data_nm1,0,ix,iy,0)[0];
           const Real *const v1_nm1 = &state_v(ie,data_nm1,1,ix,iy,0)[0];
 
@@ -730,19 +728,6 @@ struct CaarFunctorImpl {
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz) {
-
-              ttmp0[ix * NP + iy] = d00 * v00[iz] + d01 * v01[iz];
-              ttmp1[ix * NP + iy] = d10 * v00[iz] + d11 * v01[iz];
-
-              team.team_barrier();
-
-              Real dvmdu = 0;
-              for (int j = 0; j < NP; j++) {
-                dvmdu += dvv[iy * NP + j] * ttmp1[ix * NP + j] - dvv[ix * NP + j] * ttmp0[j * NP + iy];
-              }
-              vort[iz] = dvmdu * rrdmd + fcor;
-
-              team.team_barrier();
 
               ttmp0[ix * NP + iy] = 0.5 * (v00[iz] * v00[iz] + v01[iz] * v01[iz]);
 
@@ -793,8 +778,23 @@ struct CaarFunctorImpl {
 
               const double vtheta = vtheta_dp0[iz] / dp3d0[iz];
               const double cp_vtheta = PhysicalConstants::cp * vtheta;
-              v_tens0 += cp_vtheta * grad_tmp0 + vdp0[iz] - v01[iz] * vort[iz];
-              v_tens1 += cp_vtheta * grad_tmp1 + vdp1[iz] + v00[iz] * vort[iz];
+              v_tens0 += cp_vtheta * grad_tmp0 + vdp0[iz];
+              v_tens1 += cp_vtheta * grad_tmp1 + vdp1[iz];
+
+              team.team_barrier();
+
+              ttmp0[ix * NP + iy] = d00 * v00[iz] + d01 * v01[iz];
+              ttmp1[ix * NP + iy] = d10 * v00[iz] + d11 * v01[iz];
+
+              team.team_barrier();
+
+              Real dvmdu = 0;
+              for (int j = 0; j < NP; j++) {
+                dvmdu += dvv[iy * NP + j] * ttmp1[ix * NP + j] - dvv[ix * NP + j] * ttmp0[j * NP + iy];
+              }
+              const Real vort = dvmdu * rrdmd + fcor;
+              v_tens0 -= v01[iz] * vort;
+              v_tens1 += v00[iz] * vort;
 
               v_tens0 *= -scale1_dt_spheremp;
               v0_np1[iz] = v0_nm1[iz] * scale3_spheremp + v_tens0;
