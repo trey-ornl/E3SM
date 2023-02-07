@@ -451,16 +451,23 @@ struct CaarFunctorImpl {
           Real *const vdp1 = &buffers_vdp(ie,1,ix,iy,0)[0];
           Real *const div_vdp = &buffers_div_vdp(ie,ix,iy,0)[0];
 
+          Real *const dvn00 = &derived_vn0(ie,0,ix,iy,0)[0];
+          Real *const dvn01 = &derived_vn0(ie,1,ix,iy,0)[0];
+
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz) {
 
               const Real dp3d = dp3d0[iz];
-              vdp0[iz] = v00[iz] * dp3d;
-              vdp1[iz] = v01[iz] * dp3d;
+              const Real v0 = v00[iz] * dp3d;
+              const Real v1 = v01[iz] * dp3d;
 
-              const Real v0 = vdp0[iz];
-              const Real v1 = vdp1[iz];
+              vdp0[iz] = v0;
+              vdp1[iz] = v1;
+
+              dvn00[iz] += data_eta_ave_w * v0;
+              dvn01[iz] += data_eta_ave_w * v1;
+
               ttmp0[ix * NP + iy] = (dinv00 * v0 + dinv10 * v1) * metdet;
               ttmp1[ix * NP + iy] = (dinv01 * v0 + dinv11 * v1) * metdet;
 
@@ -508,7 +515,7 @@ struct CaarFunctorImpl {
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz) {
-              Real omega_p = -0.5 * (omega_i[iz] + omega_i[iz+1]);
+
               ttmp0[ix * NP + iy] = 0.5 * (pi_i[iz] + pi_i[iz+1]);
 
               team.team_barrier();
@@ -524,6 +531,7 @@ struct CaarFunctorImpl {
               const Real grad_tmp0 = dinv00 * d0 + dinv01 * d1;
               const Real grad_tmp1 = dinv10 * d0 + dinv11 * d1;
 
+              Real omega_p = -0.5 * (omega_i[iz] + omega_i[iz+1]);
               omega_p += v00[iz] * grad_tmp0 + v01[iz] * grad_tmp1;
               domega_p[iz] += data_eta_ave_w * omega_p;
 
@@ -577,16 +585,6 @@ struct CaarFunctorImpl {
             });
 
           // compute_accumulated_quantities
-
-          Real *const dvn00 = &derived_vn0(ie,0,ix,iy,0)[0];
-          Real *const dvn01 = &derived_vn0(ie,1,ix,iy,0)[0];
-
-          Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(team, NUM_LEV),
-            [&](const int iz) {
-              dvn00[iz] += data_eta_ave_w * vdp0[iz];
-              dvn01[iz] += data_eta_ave_w * vdp1[iz];
-            });
 
           // compute_w_and_phi_tens
 
@@ -722,7 +720,6 @@ struct CaarFunctorImpl {
           const Real fcor = geometry_fcor(ie,ix,iy);
 
           Real *const vort = &buffers_vort(ie,ix,iy,0)[0];
-          Real *const temp = &buffers_temp(ie,ix,iy,0)[0];
 
           const Real *const v0_nm1 = &state_v(ie,data_nm1,0,ix,iy,0)[0];
           const Real *const v1_nm1 = &state_v(ie,data_nm1,1,ix,iy,0)[0];
@@ -747,7 +744,7 @@ struct CaarFunctorImpl {
 
               team.team_barrier();
 
-              temp[iz] = ttmp0[ix * NP + iy] = 0.5 * (v00[iz] * v00[iz] + v01[iz] * v01[iz]);
+              ttmp0[ix * NP + iy] = 0.5 * (v00[iz] * v00[iz] + v01[iz] * v01[iz]);
 
               ttmp1[ix * NP + iy] = 0.25 * (w_i0[iz] * w_i0[iz] + w_i0[iz+1] * w_i0[iz + 1]);
 
