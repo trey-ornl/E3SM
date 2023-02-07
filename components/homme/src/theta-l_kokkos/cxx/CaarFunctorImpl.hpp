@@ -741,12 +741,15 @@ struct CaarFunctorImpl {
 
               t0 *= sphere_rrearth;
               t1 *= sphere_rrearth;
-              vdp0[iz] = dinv00 * t0 + dinv01 * t1;
-              vdp1[iz] = dinv10 * t0 + dinv11 * t1;
-              vdp0[iz] -= 0.5 * (v_i0[iz] * w_i0[iz] + v_i0[iz+1] * w_i0[iz+1]);
-              vdp1[iz] -= 0.5 * (v_i1[iz] * w_i0[iz] + v_i1[iz+1] * w_i0[iz+1]);
-              vdp0[iz] += 0.5 * (grad_phinh_i0[iz] * dpnh_dp_i[iz] + grad_phinh_i0[iz+1] * dpnh_dp_i[iz+1]);
-              vdp1[iz] += 0.5 * (grad_phinh_i1[iz] * dpnh_dp_i[iz] + grad_phinh_i1[iz+1] * dpnh_dp_i[iz+1]);
+              Real vdp0 = dinv00 * t0 + dinv01 * t1;
+              vdp0 -= 0.5 * (v_i0[iz] * w_i0[iz] + v_i0[iz+1] * w_i0[iz+1]);
+              vdp0 += 0.5 * (grad_phinh_i0[iz] * dpnh_dp_i[iz] + grad_phinh_i0[iz+1] * dpnh_dp_i[iz+1]);
+              v_tens0 += vdp0;
+
+              Real vdp1 = dinv10 * t0 + dinv11 * t1;
+              vdp1 -= 0.5 * (v_i1[iz] * w_i0[iz] + v_i1[iz+1] * w_i0[iz+1]);
+              vdp1 += 0.5 * (grad_phinh_i1[iz] * dpnh_dp_i[iz] + grad_phinh_i1[iz+1] * dpnh_dp_i[iz+1]);
+              v_tens1 += vdp1;
 
               team.team_barrier();
 
@@ -766,8 +769,8 @@ struct CaarFunctorImpl {
 
               const double vtheta = vtheta_dp0[iz] / dp3d0[iz];
               const double cp_vtheta = PhysicalConstants::cp * vtheta;
-              v_tens0 += cp_vtheta * grad_tmp0 + vdp0[iz];
-              v_tens1 += cp_vtheta * grad_tmp1 + vdp1[iz];
+              v_tens0 += cp_vtheta * grad_tmp0;
+              v_tens1 += cp_vtheta * grad_tmp1;
 
               team.team_barrier();
 
