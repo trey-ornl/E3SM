@@ -552,36 +552,33 @@ struct CaarFunctorImpl {
 
           // compute_interface_quantities
 
-          Real *const dp_i = &buffers_dp_i(ie,ix,iy,0)[0];
-
-          dp_i[0] = dp3d0[0];
-          dp_i[NUM_LEV] = dp3d0[NUM_LEV-1];
-
           Real *const v_i0 = &buffers_v_i(ie,0,ix,iy,0)[0];
           Real *const v_i1 = &buffers_v_i(ie,1,ix,iy,0)[0];
-
-          v_i0[0] = v00[0];
-          v_i1[0] = v01[0];
-
-          v_i0[NUM_LEV] = v00[NUM_LEV-1];
-          v_i1[NUM_LEV] = v01[NUM_LEV-1];
-
           Real *const dpnh_dp_i = &buffers_dpnh_dp_i(ie,ix,iy,0)[0];
 
-          dpnh_dp_i[0] = 2.0 * (pnh[0] - pi_i00) / dp_i[0];
-          const Real pnh_last = pnh[NUM_LEV-1];
-          const Real dp_last = dp_i[NUM_LEV];
-          const Real pnh_i_last = pnh_last + 0.5 * dp_last;
-          dpnh_dp_i[NUM_LEV] = 2.0 * (pnh_i_last - pnh_last) / dp_last;
-
           Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(team, NUM_LEV-1),
+            Kokkos::ThreadVectorRange(team, NUM_LEV_P),
             [&] (const int iz) {
-              dp_i[iz+1] = 0.5 * (dp3d0[iz] + dp3d0[iz+1]);
-              const Real denom = 1.0 / (2.0 * dp_i[iz+1]);
-              v_i0[iz+1] = (dp3d0[iz+1] * v00[iz+1] + dp3d0[iz] * v00[iz]) * denom;
-              v_i1[iz+1] = (dp3d0[iz+1] * v01[iz+1] + dp3d0[iz] * v01[iz]) * denom;
-              dpnh_dp_i[iz+1] = (pnh[iz+1] - pnh[iz]) / dp_i[iz+1];
+
+              const Real dpiz = (iz < NUM_LEV) ? dp3d0[iz] : 0.0;
+              const Real dpizm1 = (iz > 0) ? dp3d0[iz-1] : 0.0;
+              const Real dp_i = dpiz + dpizm1;
+              const Real denom = 1.0 / dp_i;
+
+              if (iz == 0) {
+                v_i0[0] = v00[0];
+                v_i1[0] = v01[0];
+              } else if (iz == NUM_LEV) {
+                v_i0[NUM_LEV] = v00[NUM_LEV-1];
+                v_i1[NUM_LEV] = v01[NUM_LEV-1];
+              } else {
+                v_i0[iz] = (dpiz * v00[iz] + dpizm1 * v00[iz-1]) * denom;
+                v_i1[iz] = (dpiz * v01[iz] + dpizm1 * v01[iz-1]) * denom;
+              }
+
+              const Real pnhiz = (iz < NUM_LEV) ? pnh[iz] : pnh[NUM_LEV-1] + 0.5 * dpizm1;
+              const Real pnhizm1 = (iz > 0) ? pnh[iz-1] : pi_i00;
+              dpnh_dp_i[iz] = 2.0 * (pnhiz - pnhizm1) * denom;
             });
 
           // compute_accumulated_quantities
