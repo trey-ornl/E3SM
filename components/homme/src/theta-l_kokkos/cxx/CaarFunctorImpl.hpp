@@ -552,40 +552,7 @@ struct CaarFunctorImpl {
 
           // compute_interface_quantities
 
-          Real *const v_i0 = &buffers_v_i(ie,0,ix,iy,0)[0];
-          Real *const v_i1 = &buffers_v_i(ie,1,ix,iy,0)[0];
           Real *const dpnh_dp_i = &buffers_dpnh_dp_i(ie,ix,iy,0)[0];
-
-          Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(team, NUM_LEV_P),
-            [&] (const int iz) {
-
-              const Real dpiz = (iz < NUM_LEV) ? dp3d0[iz] : 0.0;
-              const Real dpizm1 = (iz > 0) ? dp3d0[iz-1] : 0.0;
-              const Real dp_i = dpiz + dpizm1;
-              const Real denom = 1.0 / dp_i;
-
-              if (iz == 0) {
-                v_i0[0] = v00[0];
-                v_i1[0] = v01[0];
-              } else if (iz == NUM_LEV) {
-                v_i0[NUM_LEV] = v00[NUM_LEV-1];
-                v_i1[NUM_LEV] = v01[NUM_LEV-1];
-              } else {
-                v_i0[iz] = (dpiz * v00[iz] + dpizm1 * v00[iz-1]) * denom;
-                v_i1[iz] = (dpiz * v01[iz] + dpizm1 * v01[iz-1]) * denom;
-              }
-
-              const Real pnhiz = (iz < NUM_LEV) ? pnh[iz] : pnh[NUM_LEV-1] + 0.5 * dpizm1;
-              const Real pnhizm1 = (iz > 0) ? pnh[iz-1] : pi_i00;
-              dpnh_dp_i[iz] = 2.0 * (pnhiz - pnhizm1) * denom;
-            });
-
-          // compute_accumulated_quantities
-
-          // compute_w_and_phi_tens
-
-          team.team_barrier();
 
           const Real *const phinh_i00 = &state_phinh_i(ie,data_n0,0,0,0)[0];
           const Real *const w_i00 = &state_w_i(ie,data_n0,0,0,0)[0];
@@ -627,7 +594,28 @@ struct CaarFunctorImpl {
               const Real grad_w_i0 = dinv00 * w0 + dinv01 * w1;
               const Real grad_w_i1 = dinv10 * w0 + dinv11 * w1;
 
-              Real wt = v_i0[iz] * grad_w_i0 + v_i1[iz] * grad_w_i1;
+              const Real dpiz = (iz < NUM_LEV) ? dp3d0[iz] : 0.0;
+              const Real dpizm1 = (iz > 0) ? dp3d0[iz-1] : 0.0;
+              const Real dp_i = dpiz + dpizm1;
+              const Real denom = 1.0 / dp_i;
+
+              Real v_i0 = 0;
+              Real v_i1 = 0;
+              if (iz == 0) {
+                v_i0 = v00[0];
+                v_i1 = v01[0];
+              } else if (iz == NUM_LEV) {
+                v_i0 = v00[NUM_LEV-1];
+                v_i1 = v01[NUM_LEV-1];
+              } else {
+                v_i0 = (dpiz * v00[iz] + dpizm1 * v00[iz-1]) * denom;
+                v_i1 = (dpiz * v01[iz] + dpizm1 * v01[iz-1]) * denom;
+              }
+
+              const Real pnhiz = (iz < NUM_LEV) ? pnh[iz] : pnh[NUM_LEV-1] + 0.5 * dpizm1;
+              const Real pnhizm1 = (iz > 0) ? pnh[iz-1] : pi_i00;
+              dpnh_dp_i[iz] = 2.0 * (pnhiz - pnhizm1) * denom;
+              Real wt = v_i0 * grad_w_i0 + v_i1 * grad_w_i1;
               wt *= -data_scale1;
               const Real scale = (iz == NUM_LEV) ? gscale1 : gscale2;
               wt += (dpnh_dp_i[iz] - 1.0) * scale;
@@ -638,10 +626,10 @@ struct CaarFunctorImpl {
               p1 *= sphere_rrearth;
               grad_phinh_i0[iz] = dinv00 * p0 + dinv01 * p1;
               grad_phinh_i1[iz] = dinv10 * p0 + dinv11 * p1;
-              Real pt = v_i0[iz] * grad_phinh_i0[iz] + v_i1[iz] * grad_phinh_i1[iz];
+              Real pt = v_i0 * grad_phinh_i0[iz] + v_i1 * grad_phinh_i1[iz];
               pt *= -data_scale1;
               pt += w_i0[iz] * gscale2;
-              pt += dscale * (v_i0[iz] * gradphis0 + v_i1[iz] * gradphis1) * hvcoord_hybrid_bi_packed[iz];
+              pt += dscale * (v_i0 * gradphis0 + v_i1 * gradphis1) * hvcoord_hybrid_bi_packed[iz];
               phi_tens[iz] = pt;
             });
 
@@ -688,6 +676,9 @@ struct CaarFunctorImpl {
             });
 
           // compute_v_tens
+
+          Real *const v_i0 = &buffers_v_i(ie,0,ix,iy,0)[0];
+          Real *const v_i1 = &buffers_v_i(ie,1,ix,iy,0)[0];
 
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV_P),
