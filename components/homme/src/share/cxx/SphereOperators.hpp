@@ -20,8 +20,6 @@
 
 namespace Homme {
 
-  static constexpr int WARP_SIZE = warpSize;
-
 class SphereOperators
 {
   static constexpr int MAX_NUM_LEV = NUM_LEV_P;
@@ -52,10 +50,8 @@ class SphereOperators
 
   template<int NUM_LEVELS>
   using DefaultProvider = ExecViewUnmanaged<const Scalar [NP][NP][NUM_LEVELS]>;
-
 public:
 
-  using ScratchArray = Kokkos::View<Scalar[2][NP][NP][NUM_LEV_P], ExecSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
 
   SphereOperators () = default;
 
@@ -447,56 +443,6 @@ public:
     });
     kv.team_barrier();
   }
-
-  template<int NUM_LEV_OUT, typename InputProvider, typename OutputProvider>
-  KOKKOS_INLINE_FUNCTION void
-  divergence_sphere (const KernelVariables &kv,
-                     const ScratchArray &gv_buf,
-                     const InputProvider &v,
-                     const OutputProvider &div_v,
-                     const Real alpha = 1.0, const Real beta = 0.0) const
-  {
-    const auto &D_inv = Homme::subview(m_dinv, kv.ie);
-    const auto &metdet = Homme::subview(m_metdet, kv.ie);
-    constexpr int np_squared = NP * NP;
-    Kokkos::parallel_for(
-      Kokkos::TeamThreadRange(kv.team, np_squared),
-      [&](const int loop_idx) {
-        const int igp = loop_idx / NP;
-        const int jgp = loop_idx % NP;
-        Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team, NUM_LEV_OUT),
-          [&] (const int& ilev) {
-            const auto &v0 = v(0, igp, jgp, ilev);
-            const auto &v1 = v(1, igp, jgp, ilev);
-            gv_buf(0,igp,jgp,ilev) = (D_inv(0,0,igp,jgp) * v0 + D_inv(1,0,igp,jgp) * v1) * metdet(igp,jgp);
-            gv_buf(1,igp,jgp,ilev) = (D_inv(0,1,igp,jgp) * v0 + D_inv(1,1,igp,jgp) * v1) * metdet(igp,jgp);
-          });
-      });
-    kv.team_barrier();
-
-    // j, l, i -> i, j, k
-    constexpr int div_iters = NP * NP;
-    Kokkos::parallel_for(
-      Kokkos::TeamThreadRange(kv.team, div_iters),
-      [&](const int loop_idx) {
-        const int igp = loop_idx / NP;
-        const int jgp = loop_idx % NP;
-        Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team, NUM_LEV_OUT),
-          [&] (const int& ilev) {
-            Scalar dudx, dvdy;
-            for (int kgp = 0; kgp < NP; ++kgp) {
-              dudx += dvv(jgp, kgp) * gv_buf(0, igp, kgp, ilev);
-              dvdy += dvv(igp, kgp) * gv_buf(1, kgp, jgp, ilev);
-            }
-            combine<CombineMode::Replace>((dudx + dvdy) * (1.0 / metdet(igp, jgp) * m_rrearth),
-                        div_v(igp, jgp, ilev), alpha, beta);
-          });
-      });
-    kv.team_barrier();
-  }
-
 
   template<int NUM_LEV_OUT, typename InputProvider, int NUM_LEV_REQUEST = NUM_LEV_OUT>
   KOKKOS_INLINE_FUNCTION void
