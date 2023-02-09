@@ -30,6 +30,8 @@
 
 #include <assert.h>
 
+#define KOKKOS_NOINLINE_FUNCTION __device__ __attribute__((noinline))
+
 namespace Homme {
 
 // Theta does not use tracers in caar. A fwd decl is enough here
@@ -393,10 +395,12 @@ struct CaarFunctorImpl {
     }
 
     if (m_rsplit==0) {
-      assert(false);
+      abort();
+#if 0
       // ============= EPOCH 2.2 ============ //
       kv.team_barrier();
       compute_vertical_advection(kv);
+#endif
     }
 
     // ============= EPOCH 3 ============== //
@@ -607,7 +611,7 @@ struct CaarFunctorImpl {
     kv.team_barrier();
   }
 
-  KOKKOS_INLINE_FUNCTION
+  KOKKOS_NOINLINE_FUNCTION
   void compute_div_vdp(KernelVariables &kv) const {
     // Compute vdp
     Kokkos::parallel_for(Kokkos::TeamThreadRange(kv.team, NP * NP),
@@ -634,7 +638,7 @@ struct CaarFunctorImpl {
         Homme::subview(m_buffers.div_vdp, kv.team_idx));
   }
 
-  KOKKOS_INLINE_FUNCTION
+  KOKKOS_NOINLINE_FUNCTION
   bool compute_scan_quantities (KernelVariables &kv) const {
     bool ok = true;
     
@@ -734,7 +738,7 @@ struct CaarFunctorImpl {
     return ok;
   }
 
-  KOKKOS_INLINE_FUNCTION
+  KOKKOS_NOINLINE_FUNCTION
   void compute_interface_quantities(KernelVariables &kv) const {
     Kokkos::parallel_for(Kokkos::TeamThreadRange(kv.team,NP*NP),
                          [&](const int idx) {
@@ -795,7 +799,7 @@ struct CaarFunctorImpl {
     });
   }
 
-  KOKKOS_INLINE_FUNCTION
+  KOKKOS_NOINLINE_FUNCTION
   void compute_vertical_advection(KernelVariables &kv) const {
     // Compute vertical advection terms:
     //  - eta_dot_dpdn
@@ -930,7 +934,7 @@ struct CaarFunctorImpl {
     });
   }
 
-  KOKKOS_INLINE_FUNCTION
+  KOKKOS_NOINLINE_FUNCTION
   void compute_accumulated_quantities(KernelVariables &kv) const {
     // Compute omega = v*grad(p) + average(omega_i)
     // Accmuulate: dereived.omega_p += eta_ave_w*omega
@@ -967,7 +971,7 @@ struct CaarFunctorImpl {
     });
   }
 
-  KOKKOS_INLINE_FUNCTION
+  KOKKOS_NOINLINE_FUNCTION
   void compute_w_and_phi_tens (KernelVariables& kv) const {
     using namespace PhysicalConstants;
     // Compute grad(phinh_i)
@@ -1034,7 +1038,7 @@ struct CaarFunctorImpl {
     });
   }
 
-  KOKKOS_INLINE_FUNCTION
+  KOKKOS_NOINLINE_FUNCTION
   void compute_w_and_phi_np1(KernelVariables &kv) const {
     // Update w_i(np1) = spheremp*(scale3*w_i(nm1) + dt*w_tens)
     // Update phi_i(np1) = spheremp*(scale3*phi_i(nm1) + dt*phi_tens)
@@ -1091,7 +1095,7 @@ struct CaarFunctorImpl {
     });
   }
 
-  KOKKOS_INLINE_FUNCTION
+  KOKKOS_NOINLINE_FUNCTION
   void compute_dp_and_theta_tens (KernelVariables &kv) const {
     // Compute dp_tens=scale1*(div(vdp) + delta(eta_dot_dpdn))
     // Compute theta_tens=scale1*(-theta_vadv-div(v*vtheta_dp)
@@ -1170,7 +1174,7 @@ struct CaarFunctorImpl {
     });
   }
 
-  KOKKOS_INLINE_FUNCTION
+  KOKKOS_NOINLINE_FUNCTION
   void compute_dp3d_and_theta_np1(KernelVariables &kv) const {
     // Update dp3d(np1) = spheremp*(scale3*dp3d(nm1) + dt*dp_tens)
     // Update vtheta_dp(np1) = spheremp*(scale3*vtheta_dp(nm1) + dt*theta_tens)
@@ -1204,7 +1208,7 @@ struct CaarFunctorImpl {
     });
   }
 
-  KOKKOS_INLINE_FUNCTION
+  KOKKOS_NOINLINE_FUNCTION
   void compute_v_tens (KernelVariables &kv) const {
     // Not necessarily in this order,
     //  - Compute vort=vorticity(v)
@@ -1371,7 +1375,7 @@ struct CaarFunctorImpl {
     });
   }
 
-  KOKKOS_INLINE_FUNCTION
+  KOKKOS_NOINLINE_FUNCTION
   void compute_v_np1(KernelVariables &kv) const {
     // Update v(np1) = spheremp*(scale3*v(nm1) + dt*v_tens)
     // NOTE: quite a few buffers no longer needed in this call of operator() are going to be reused here.
