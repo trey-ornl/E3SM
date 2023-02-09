@@ -569,19 +569,19 @@ struct CaarFunctorImpl {
           const Real grad_phinh_i1 = dinv10 * p0 + dinv11 * p1;
 
           const Real *const dp3d0 = &state_dp3d(ie,data_n0,ix,iy,0)[0];
-          const Real dp0 = (iz < NUM_LEV) ? dp3d0[iz] : dp3d0[NUM_LEV-1];
-          const Real dpm = (iz > 0) ? dp3d0[iz-1] : dp3d0[0];
+          const Real dp0 = (iz < NUM_LEV) ? dp3d0[iz] : 0;
+          const Real dpm = (iz > 0) ? dp3d0[iz-1] : 0;
           const Real dp_i = dpm + dp0;
           const Real denom = 1.0 / dp_i;
 
           const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
-          const Real v000 = (iz < NUM_LEV) ? v00[iz] : v00[NUM_LEV-1];
-          const Real v00m = (iz > 0) ? v00[iz-1] : v00[0];
+          const Real v000 = (iz < NUM_LEV) ? v00[iz] : 0;
+          const Real v00m = (iz > 0) ? v00[iz-1] : 0;
           const Real v_i0 = (dp0 * v000 + dpm * v00m) * denom;
 
           const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
-          const Real v010 = (iz < NUM_LEV) ? v01[iz] : v01[NUM_LEV-1];
-          const Real v01m = (iz > 0) ? v01[iz-1] : v01[0];
+          const Real v010 = (iz < NUM_LEV) ? v01[iz] : 0;
+          const Real v01m = (iz > 0) ? v01[iz-1] : 0;
           const Real v_i1 = (dp0 * v010 + dpm * v01m) * denom;
 
           Real pt = v_i0 * grad_phinh_i0 + v_i1 * grad_phinh_i1;
