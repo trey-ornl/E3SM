@@ -619,18 +619,11 @@ struct CaarFunctorImpl {
           Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_NPNP));
           if (dz == 0) dvv[ix * NP + iy] = sphere_dvv(ix,iy);
 
-          const Real dinv00 = sphere_dinv(ie,0,0,ix,iy);
-          const Real dinv01 = sphere_dinv(ie,0,1,ix,iy);
-          const Real dinv10 = sphere_dinv(ie,1,0,ix,iy);
-          const Real dinv11 = sphere_dinv(ie,1,1,ix,iy);
-
-          const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
-          const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
-          const Real *const dp3d0 = &state_dp3d(ie,data_n0,ix,iy,0)[0];
           const Real *const vtheta_dp0 = &state_vtheta_dp(ie,data_n0,ix,iy,0)[0];
           const Real *const phinh_i0 = &state_phinh_i(ie,data_n0,ix,iy,0)[0];
 
-          Real *const pnh = &buffers_pnh(ie,ix,iy,0)[0];
+          Real *const ptmp = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_POINT));
+          Real *const pnh = ptmp + (ix * NP + iy) * NUM_LEV;
 
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
@@ -644,52 +637,23 @@ struct CaarFunctorImpl {
               pnhiz *= PhysicalConstants::p0;
               pnh[iz] = pnhiz;
             });
-          team.team_barrier();
-
-          // compute_interface_quantities
-
-          Real *const dp_i = &buffers_dp_i(ie,ix,iy,0)[0];
-
-          dp_i[0] = dp3d0[0];
-          dp_i[NUM_LEV] = dp3d0[NUM_LEV-1];
-
-          Real *const v_i0 = &buffers_v_i(ie,0,ix,iy,0)[0];
-          Real *const v_i1 = &buffers_v_i(ie,1,ix,iy,0)[0];
-
-          v_i0[0] = v00[0];
-          v_i1[0] = v01[0];
-
-          v_i0[NUM_LEV] = v00[NUM_LEV-1];
-          v_i1[NUM_LEV] = v01[NUM_LEV-1];
-
-          Real *const dpnh_dp_i = &buffers_dpnh_dp_i(ie,ix,iy,0)[0];
-
-          dpnh_dp_i[0] = 2.0 * (pnh[0] - pi_i00) / dp_i[0];
-          const Real pnh_last = pnh[NUM_LEV-1];
-          const Real dp_last = dp_i[NUM_LEV];
-          const Real pnh_i_last = pnh_last + 0.5 * dp_last;
-          dpnh_dp_i[NUM_LEV] = 2.0 * (pnh_i_last - pnh_last) / dp_last;
-
-          Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(team, NUM_LEV-1),
-            [&] (const int iz) {
-              dp_i[iz+1] = 0.5 * (dp3d0[iz] + dp3d0[iz+1]);
-              const Real denom = 1.0 / (2.0 * dp_i[iz+1]);
-              v_i0[iz+1] = (dp3d0[iz+1] * v00[iz+1] + dp3d0[iz] * v00[iz]) * denom;
-              v_i1[iz+1] = (dp3d0[iz+1] * v01[iz+1] + dp3d0[iz] * v01[iz]) * denom;
-              dpnh_dp_i[iz+1] = (pnh[iz+1] - pnh[iz]) / dp_i[iz+1];
-            });
 
           team.team_barrier();
 
+          const Real *const dp3d0 = &state_dp3d(ie,data_n0,ix,iy,0)[0];
+          const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
+          const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
           const Real *const w_i00 = &state_w_i(ie,data_n0,0,0,0)[0];
 
-          Real *const grad_w_i0 = &buffers_grad_w_i(ie,0,ix,iy,0)[0];
-          Real *const grad_w_i1 = &buffers_grad_w_i(ie,1,ix,iy,0)[0];
           Real *const w_tens = &buffers_w_tens(ie,ix,iy,0)[0];
 
           const Real spheremp = geometry_spheremp(ie,ix,iy);
           const Real dt_spheremp = data_dt * spheremp;
+
+          const Real dinv00 = sphere_dinv(ie,0,0,ix,iy);
+          const Real dinv01 = sphere_dinv(ie,0,1,ix,iy);
+          const Real dinv10 = sphere_dinv(ie,1,0,ix,iy);
+          const Real dinv11 = sphere_dinv(ie,1,1,ix,iy);
 
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV_P),
@@ -707,15 +671,32 @@ struct CaarFunctorImpl {
               }
               w0 *= sphere_rrearth;
               w1 *= sphere_rrearth;
-              grad_w_i0[iz] = dinv00 * w0 + dinv01 * w1;
-              grad_w_i1[iz] = dinv10 * w0 + dinv11 * w1;
+              const Real grad_w_i0 = dinv00 * w0 + dinv01 * w1;
+              const Real grad_w_i1 = dinv10 * w0 + dinv11 * w1;
 
-              Real wt = v_i0[iz] * grad_w_i0[iz] + v_i1[iz] * grad_w_i1[iz];
+              const Real dp0 = (iz < NUM_LEV) ? dp3d0[iz] : 0;
+              const Real dpm = (iz > 0) ? dp3d0[iz-1] : 0;
+              const Real dp_i = dp0 + dpm;
+              const Real denom = 1.0 / dp_i;
+
+              const Real v000 = (iz < NUM_LEV) ? v00[iz] : 0;
+              const Real v00m = (iz > 0) ? v00[iz-1] : 0;
+              const Real v_i0 = (dp0 * v000 + dpm * v00m) * denom;
+
+              const Real v010 = (iz < NUM_LEV) ? v01[iz] : 0;
+              const Real v01m = (iz > 0) ? v01[iz-1] : 0;
+              const Real v_i1 = (dp0 * v010 + dpm * v01m) * denom;
+
+              const Real pnhm = (iz > 0) ? pnh[iz-1] : pi_i00;
+              const Real pnh0 = (iz < NUM_LEV) ? pnh[iz] : pnh[iz-1] + 0.5 * dp_i;
+              const Real dpnh_dp_i = 2.0 * (pnh0 - pnhm) * denom;
+
+              Real wt = v_i0 * grad_w_i0 + v_i1 * grad_w_i1;
               wt *= -data_scale1;
               const Real scale = (iz == NUM_LEV) ? gscale1 : gscale2;
-              wt += (dpnh_dp_i[iz] - 1.0) * scale;
+              wt += (dpnh_dp_i - 1.0) * scale;
+              wt *= dt_spheremp;
               w_tens[iz] = wt;
-              w_tens[iz] *= dt_spheremp;
             });
         });
 
