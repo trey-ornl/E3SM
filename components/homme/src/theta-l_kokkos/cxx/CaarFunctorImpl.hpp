@@ -336,7 +336,7 @@ struct CaarFunctorImpl {
 
     GPTLstart("caar compute");
 
-//#define TREYPRINT
+#define TREYPRINT
 #define TREY
 #ifdef TREY
     if ((m_rsplit > 0) && (!m_theta_hydrostatic_mode) && (m_theta_advection_form == AdvectionForm::NonConservative)) {
@@ -437,7 +437,7 @@ struct CaarFunctorImpl {
           Real *const ttmp1 = ttmp10 + dz * NPNP;
 
           Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_NPNP));
-          if (dz == 0) dvv[ix * NP + iy] = sphere_dvv(ix,iy);
+          if (dz == 0) dvv[tr] = sphere_dvv(ix,iy);
 
           const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
           const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
@@ -465,8 +465,8 @@ struct CaarFunctorImpl {
               vdp0[iz] = v0;
               vdp1[iz] = v1;
 
-              ttmp0[ix * NP + iy] = (dinv00 * v0 + dinv10 * v1) * metdet;
-              ttmp1[ix * NP + iy] = (dinv01 * v0 + dinv11 * v1) * metdet;
+              ttmp0[tr] = (dinv00 * v0 + dinv10 * v1) * metdet;
+              ttmp1[tr] = (dinv01 * v0 + dinv11 * v1) * metdet;
 
               team.team_barrier();
 
@@ -535,7 +535,7 @@ struct CaarFunctorImpl {
             });
 
           Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_NPNP));
-          if (dz == 0) dvv[ix * NP + iy] = sphere_dvv(ix,iy);
+          if (dz == 0) dvv[tr] = sphere_dvv(ix,iy);
 
           Real *const ttmp00 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_THREAD));
           Real *const ttmp0 = ttmp00 + dz * NPNP;
@@ -552,7 +552,7 @@ struct CaarFunctorImpl {
 
               pi[iz] = 0.5 * (pi_i[iz] + pi_i[iz+1]);
               omega_p[iz] = -0.5 * (omega_i[iz] + omega_i[iz+1]);
-              ttmp0[ix * NP + iy] = pi[iz];
+              ttmp0[tr] = pi[iz];
 
               team.team_barrier();
 
@@ -681,7 +681,7 @@ struct CaarFunctorImpl {
             });
 
           Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_NPNP));
-          if (dz == 0) dvv[ix * NP + iy] = sphere_dvv(ix,iy);
+          if (dz == 0) dvv[tr] = sphere_dvv(ix,iy);
 
           team.team_barrier();
 
@@ -696,7 +696,7 @@ struct CaarFunctorImpl {
 
           const Real *const phinh_i00 = &state_phinh_i(ie,data_n0,0,0,0)[0];
           const Real *const w_i00 = &state_w_i(ie,data_n0,0,0,0)[0];
-          const Real *const w_i0 = w_i00 + (ix * NP + iy) * NUM_LEV_P;
+          const Real *const w_i0 = w_i00 + (tr) * NUM_LEV_P;
 
           Real *const grad_phinh_i0 = &buffers_grad_phinh_i(ie,0,ix,iy,0)[0];
           Real *const grad_phinh_i1 = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
@@ -772,7 +772,7 @@ struct CaarFunctorImpl {
           Real *const ttmp0 = ttmp00 + dz * NPNP;
 
           Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_NPNP));
-          if (dz == 0) dvv[ix * NP + iy] = sphere_dvv(ix,iy);
+          if (dz == 0) dvv[tr] = sphere_dvv(ix,iy);
 
           const Real *const dp3d0 = &state_dp3d(ie,data_n0,ix,iy,0)[0];
           const Real *const vdp0 = &buffers_vdp(ie,0,ix,iy,0)[0];
@@ -797,7 +797,7 @@ struct CaarFunctorImpl {
             [&](const int iz) {
 
               const double vtheta = vtheta_dp0[iz] / dp3d0[iz];
-              ttmp0[ix * NP + iy] = vtheta;
+              ttmp0[tr] = vtheta;
 
               team.team_barrier();
 
@@ -814,7 +814,7 @@ struct CaarFunctorImpl {
 
               dp_tens[iz] = div_vdp[iz];
 
-              Real tt = div_vdp[iz] * ttmp0[ix * NP + iy];
+              Real tt = div_vdp[iz] * ttmp0[tr];
               tt += grad_tmp0[iz] * vdp0[iz] + grad_tmp1[iz] * vdp1[iz];
               theta_tens[iz] = tt;
 
@@ -848,7 +848,7 @@ struct CaarFunctorImpl {
           Real *const ttmp1 = ttmp10 + dz * NPNP;
 
           Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_NPNP));
-          if (dz == 0) dvv[ix * NP + iy] = sphere_dvv(ix,iy);
+          if (dz == 0) dvv[tr] = sphere_dvv(ix,iy);
 
           const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
           const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
@@ -873,7 +873,7 @@ struct CaarFunctorImpl {
           Real *const dpnh_dp_i = &buffers_dpnh_dp_i(ie,ix,iy,0)[0];
 
           const Real *const w_i00 = &state_w_i(ie,data_n0,0,0,0)[0];
-          const Real *const w_i0 = w_i00 + (ix * NP + iy) * NUM_LEV_P;
+          const Real *const w_i0 = w_i00 + (tr) * NUM_LEV_P;
 
           const Real *const grad_phinh_i0 = &buffers_grad_phinh_i(ie,0,ix,iy,0)[0];
           const Real *const grad_phinh_i1 = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
@@ -913,8 +913,8 @@ struct CaarFunctorImpl {
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz) {
 
-              ttmp0[ix * NP + iy] = d00 * v00[iz] + d01 * v01[iz];
-              ttmp1[ix * NP + iy] = d10 * v00[iz] + d11 * v01[iz];
+              ttmp0[tr] = d00 * v00[iz] + d01 * v01[iz];
+              ttmp1[tr] = d10 * v00[iz] + d11 * v01[iz];
 
               team.team_barrier();
 
@@ -926,9 +926,9 @@ struct CaarFunctorImpl {
 
               team.team_barrier();
 
-              ttmp0[ix * NP + iy] = 0.5 * (v00[iz] * v00[iz] + v01[iz] * v01[iz]);
+              ttmp0[tr] = 0.5 * (v00[iz] * v00[iz] + v01[iz] * v01[iz]);
 
-              ttmp1[ix * NP + iy] = 0.25 * (w_i0[iz] * w_i0[iz] + w_i0[iz+1] * w_i0[iz + 1]);
+              ttmp1[tr] = 0.25 * (w_i0[iz] * w_i0[iz] + w_i0[iz+1] * w_i0[iz + 1]);
 
               team.team_barrier();
 
@@ -959,7 +959,7 @@ struct CaarFunctorImpl {
 
               team.team_barrier();
 
-              ttmp0[ix * NP + iy] = exner[iz];
+              ttmp0[tr] = exner[iz];
 
               team.team_barrier();
 
