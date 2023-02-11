@@ -843,6 +843,7 @@ struct CaarFunctorImpl {
 
           Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_NPNP));
           if (dz == 0) dvv[tr] = sphere_dvv(ix,iy);
+          team.team_barrier();
 
           Real *const ptmp0 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_POINT));
           Real *const v_i0 = ptmp0 + tr * NUM_LEV_P;
@@ -866,7 +867,7 @@ struct CaarFunctorImpl {
 
               double w0 = 0;
               double w1 = 0;
-#pragma nounroll
+//#pragma nounroll
               for (int j = 0; j < NP; j++) {
                 const int iyj = iy * NP + j;
                 const int ixjz = (ix * NP + j) * NUM_LEV_P + iz;
@@ -884,21 +885,10 @@ struct CaarFunctorImpl {
           const Real *const w_i0 = w_i00 + (tr) * NUM_LEV_P;
           const Real *const grad_phinh_i0 = &buffers_grad_phinh_i(ie,0,ix,iy,0)[0];
           const Real *const grad_phinh_i1 = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
-          const Real *const vtheta_dp0 = &state_vtheta_dp(ie,data_n0,ix,iy,0)[0];
           const Real *const dpnh_dp_i = &buffers_dpnh_dp_i(ie,ix,iy,0)[0];
-          const Real *const exner = &buffers_exner(ie,ix,iy,0)[0];
 
           Real *const v_tens0 = &buffers_v_tens(ie,0,ix,iy,0)[0];
           Real *const v_tens1 = &buffers_v_tens(ie,1,ix,iy,0)[0];
-
-          const Real *const d = &sphere_d(ie,0,0,ix,iy);
-          const Real d00 = d[0];
-          const Real d01 = d[NPNP];
-          const Real d10 = d[2*NPNP];
-          const Real d11 = d[3*NPNP];
-          const Real fcor = geometry_fcor(ie,ix,iy);
-          const Real metdet = sphere_metdet(ie,ix,iy);
-          const Real rrdmd = (1.0 / metdet) * sphere_rrearth;
 
           Real *const ttmp00 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_THREAD));
           Real *const ttmp0 = ttmp00 + dz * NPNP;
@@ -909,11 +899,9 @@ struct CaarFunctorImpl {
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz) {
 
+              ttmp1[tr] = 0.25 * (w_i0[iz] * w_i0[iz] + w_i0[iz+1] * w_i0[iz+1]);
               Real vt0 = 0.5 * (grad_phinh_i0[iz] * dpnh_dp_i[iz] + grad_phinh_i0[iz+1] * dpnh_dp_i[iz+1]);
               Real vt1 = 0.5 * (grad_phinh_i1[iz] * dpnh_dp_i[iz] + grad_phinh_i1[iz+1] * dpnh_dp_i[iz+1]);
-
-              ttmp0[tr] = exner[iz];
-              ttmp1[tr] = 0.25 * (w_i0[iz] * w_i0[iz] + w_i0[iz+1] * w_i0[iz+1]);
 
               team.team_barrier();
 
@@ -933,7 +921,33 @@ struct CaarFunctorImpl {
               vt0 -= 0.5 * (v_i0[iz] * w_i0[iz] + v_i0[iz+1] * w_i0[iz+1]);
               vt1 -= 0.5 * (v_i1[iz] * w_i0[iz] + v_i1[iz+1] * w_i0[iz+1]);
 
-              t0 = t1 = 0;
+              team.team_barrier();
+
+              v_i0[iz] = vt0;
+              v_i1[iz] = vt1;
+            });
+
+          const Real *const exner = &buffers_exner(ie,ix,iy,0)[0];
+          const Real *const vtheta_dp0 = &state_vtheta_dp(ie,data_n0,ix,iy,0)[0];
+
+          const Real *const d = &sphere_d(ie,0,0,ix,iy);
+          const Real d00 = d[0];
+          const Real d01 = d[NPNP];
+          const Real d10 = d[2*NPNP];
+          const Real d11 = d[3*NPNP];
+          const Real fcor = geometry_fcor(ie,ix,iy);
+          const Real metdet = sphere_metdet(ie,ix,iy);
+          const Real rrdmd = (1.0 / metdet) * sphere_rrearth;
+
+          Kokkos::parallel_for(
+            Kokkos::ThreadVectorRange(team, NUM_LEV),
+            [&](const int iz) {
+
+              ttmp0[tr] = exner[iz];
+
+              team.team_barrier();
+              Real t0 = 0;
+              Real t1 = 0;
 #pragma nounroll
               for (int j = 0; j < NP; j++) {
                 t0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
@@ -946,8 +960,8 @@ struct CaarFunctorImpl {
 
               const double vtheta = vtheta_dp0[iz] / dp3d0[iz];
               const double cp_vtheta = PhysicalConstants::cp * vtheta;
-              vt0 += cp_vtheta * grad_tmp0;
-              vt1 += cp_vtheta * grad_tmp1;
+              Real vt0 = v_i0[iz] + cp_vtheta * grad_tmp0;
+              Real vt1 = v_i1[iz] + cp_vtheta * grad_tmp1;
 
               team.team_barrier();
 
@@ -976,7 +990,7 @@ struct CaarFunctorImpl {
 
               Real s0 = 0;
               Real s1 = 0;
-#pragma nounroll
+//#pragma nounroll
               for (int j = 0; j < NP; j++) {
                 s0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
                 s1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
