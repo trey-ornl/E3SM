@@ -841,14 +841,13 @@ struct CaarFunctorImpl {
               dz = k;
             });
 
-          Real *const ttmp00 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_THREAD));
-          Real *const ttmp0 = ttmp00 + dz * NPNP;
-
-          Real *const ttmp10 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_THREAD));
-          Real *const ttmp1 = ttmp10 + dz * NPNP;
-
           Real *const dvv = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_NPNP));
           if (dz == 0) dvv[tr] = sphere_dvv(ix,iy);
+
+          Real *const ptmp0 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_POINT));
+          Real *const v_i0 = ptmp0 + tr * NUM_LEV_P;
+          Real *const ptmp1 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_POINT));
+          Real *const v_i1 = ptmp1 + tr * NUM_LEV_P;
 
           const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
           const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
@@ -859,9 +858,6 @@ struct CaarFunctorImpl {
           const Real dinv10 = sphere_dinv(ie,1,0,ix,iy);
           const Real dinv11 = sphere_dinv(ie,1,1,ix,iy);
 
-          Real *const v_i0 = &buffers_v_i(ie,0,ix,iy,0)[0];
-          Real *const v_i1 = &buffers_v_i(ie,1,ix,iy,0)[0];
-
           const Real *const w_i00 = &state_w_i(ie,data_n0,0,0,0)[0];
 
           Kokkos::parallel_for(
@@ -870,7 +866,7 @@ struct CaarFunctorImpl {
 
               double w0 = 0;
               double w1 = 0;
-#pragma unroll
+#pragma nounroll
               for (int j = 0; j < NP; j++) {
                 const int iyj = iy * NP + j;
                 const int ixjz = (ix * NP + j) * NUM_LEV_P + iz;
@@ -904,9 +900,17 @@ struct CaarFunctorImpl {
           const Real metdet = sphere_metdet(ie,ix,iy);
           const Real rrdmd = (1.0 / metdet) * sphere_rrearth;
 
+          Real *const ttmp00 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_THREAD));
+          Real *const ttmp0 = ttmp00 + dz * NPNP;
+          Real *const ttmp10 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_THREAD));
+          Real *const ttmp1 = ttmp10 + dz * NPNP;
+
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz) {
+
+              Real vt0 = 0.5 * (grad_phinh_i0[iz] * dpnh_dp_i[iz] + grad_phinh_i0[iz+1] * dpnh_dp_i[iz+1]);
+              Real vt1 = 0.5 * (grad_phinh_i1[iz] * dpnh_dp_i[iz] + grad_phinh_i1[iz+1] * dpnh_dp_i[iz+1]);
 
               ttmp0[tr] = exner[iz];
               ttmp1[tr] = 0.25 * (w_i0[iz] * w_i0[iz] + w_i0[iz+1] * w_i0[iz+1]);
@@ -923,12 +927,11 @@ struct CaarFunctorImpl {
               t0 *= sphere_rrearth;
               t1 *= sphere_rrearth;
 
-              Real vt0 = dinv00 * t0 + dinv01 * t1;
+              vt0 += dinv00 * t0 + dinv01 * t1;
+              vt1 += dinv10 * t0 + dinv11 * t1;
+
               vt0 -= 0.5 * (v_i0[iz] * w_i0[iz] + v_i0[iz+1] * w_i0[iz+1]);
-              vt0 += 0.5 * (grad_phinh_i0[iz] * dpnh_dp_i[iz] + grad_phinh_i0[iz+1] * dpnh_dp_i[iz+1]);
-              Real vt1 = dinv10 * t0 + dinv11 * t1;
               vt1 -= 0.5 * (v_i1[iz] * w_i0[iz] + v_i1[iz+1] * w_i0[iz+1]);
-              vt1 += 0.5 * (grad_phinh_i1[iz] * dpnh_dp_i[iz] + grad_phinh_i1[iz+1] * dpnh_dp_i[iz+1]);
 
               t0 = t1 = 0;
 #pragma nounroll
@@ -957,6 +960,7 @@ struct CaarFunctorImpl {
               team.team_barrier();
 
               Real dvmdu = 0;
+#pragma nounroll
               for (int j = 0; j < NP; j++) {
                 dvmdu += dvv[iy * NP + j] * ttmp1[ix * NP + j] - dvv[ix * NP + j] * ttmp0[j * NP + iy];
               }
@@ -972,6 +976,7 @@ struct CaarFunctorImpl {
 
               Real s0 = 0;
               Real s1 = 0;
+#pragma nounroll
               for (int j = 0; j < NP; j++) {
                 s0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
                 s1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
