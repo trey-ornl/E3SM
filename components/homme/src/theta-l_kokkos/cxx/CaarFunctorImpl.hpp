@@ -559,6 +559,7 @@ struct CaarFunctorImpl {
 
               Real d0 = 0;
               Real d1 = 0;
+#pragma unroll 2
               for (int j = 0; j < NP; j++) {
                 d0 += dvv[iy * NP + j] * ttmp0[ix * NP + j];
                 d1 += dvv[ix * NP + j] * ttmp0[j * NP + iy];
@@ -587,47 +588,6 @@ struct CaarFunctorImpl {
         });
 
       // TREY compute_interface_quantities
-      Kokkos::parallel_for(
-        "caar loop pre-boundary exchange lambda",
-        TeamPolicy(m_num_elems, NPNP, WARP_SIZE),
-        KOKKOS_LAMBDA(const Team &team) {
-
-          const int ie = team.league_rank();
-          const int tr = team.team_rank();
-          const int ix = tr / NP;
-          const int iy = tr % NP;
-
-          const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
-          const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
-          const Real *const dp3d0 = &state_dp3d(ie,data_n0,ix,iy,0)[0];
-          const Real *const pnh = &buffers_pnh(ie,ix,iy,0)[0];
-
-          Real *const v_i0 = &buffers_v_i(ie,0,ix,iy,0)[0];
-          Real *const v_i1 = &buffers_v_i(ie,1,ix,iy,0)[0];
-          Real *const dpnh_dp_i = &buffers_dpnh_dp_i(ie,ix,iy,0)[0];
-        
-          Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(team, NUM_LEV_P),
-            [&] (const int iz) {
-
-              const Real dm = (iz > 0) ? dp3d0[iz-1] : 0;
-              const Real dz = (iz < NUM_LEV) ? dp3d0[iz] : 0;
-              const Real denom = 1.0 / (dz + dm);
-
-              const Real pm = (iz > 0) ? pnh[iz-1] : pi_i00;
-              const Real pz = (iz < NUM_LEV) ? pnh[iz] : pm + 0.5 * dm;
-              dpnh_dp_i[iz] = 2.0 * (pz - pm) * denom;
-
-              const Real v0m = (iz > 0) ? v00[iz-1] : 0;
-              const Real v0z = (iz < NUM_LEV) ? v00[iz] : 0;
-              v_i0[iz] = (dz * v0z + dm * v0m) * denom;
-
-              const Real v1m = (iz > 0) ? v01[iz-1] : 0;
-              const Real v1z = (iz < NUM_LEV) ? v01[iz] : 0;
-              v_i1[iz] = (dz * v1z + dm * v1m) * denom;
-            });
-        });
-      
       // TREY compute_w_and_phi_tens
       Kokkos::parallel_for(
         "caar loop pre-boundary exchange lambda",
@@ -657,14 +617,16 @@ struct CaarFunctorImpl {
           const Real dinv10 = sphere_dinv(ie,1,0,ix,iy);
           const Real dinv11 = sphere_dinv(ie,1,1,ix,iy);
 
-          const Real *const v_i0 = &buffers_v_i(ie,0,ix,iy,0)[0];
-          const Real *const v_i1 = &buffers_v_i(ie,1,ix,iy,0)[0];
-          const Real *const dpnh_dp_i = &buffers_dpnh_dp_i(ie,ix,iy,0)[0];
+          const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
+          const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
+          const Real *const dp3d0 = &state_dp3d(ie,data_n0,ix,iy,0)[0];
+          const Real *const pnh = &buffers_pnh(ie,ix,iy,0)[0];
 
           const Real *const phinh_i00 = &state_phinh_i(ie,data_n0,0,0,0)[0];
           const Real *const w_i00 = &state_w_i(ie,data_n0,0,0,0)[0];
           const Real *const w_i0 = w_i00 + (tr) * NUM_LEV_P;
 
+          Real *const dpnh_dp_i = &buffers_dpnh_dp_i(ie,ix,iy,0)[0];
           Real *const grad_phinh_i0 = &buffers_grad_phinh_i(ie,0,ix,iy,0)[0];
           Real *const grad_phinh_i1 = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
           Real *const phi_tens = &buffers_phi_tens(ie,ix,iy,0)[0];
@@ -681,6 +643,7 @@ struct CaarFunctorImpl {
               double p1 = 0;
               double w0 = 0;
               double w1 = 0;
+#pragma unroll 2
               for (int j = 0; j < NP; j++) {
                 const int iyj = iy * NP + j;
                 const int ixjz = (ix * NP + j) * NUM_LEV_P + iz;
@@ -695,21 +658,39 @@ struct CaarFunctorImpl {
               p1 *= sphere_rrearth;
               w0 *= sphere_rrearth;
               w1 *= sphere_rrearth;
-              grad_phinh_i0[iz] = dinv00 * p0 + dinv01 * p1;
-              grad_phinh_i1[iz] = dinv10 * p0 + dinv11 * p1;
+
+              const Real dm = (iz > 0) ? dp3d0[iz-1] : 0;
+              const Real dz = (iz < NUM_LEV) ? dp3d0[iz] : 0;
+              const Real denom = 1.0 / (dz + dm);
+
+              const Real v0m = (iz > 0) ? v00[iz-1] : 0;
+              const Real v0z = (iz < NUM_LEV) ? v00[iz] : 0;
+              const Real v_i0 = (dz * v0z + dm * v0m) * denom;
+
+              const Real v1m = (iz > 0) ? v01[iz-1] : 0;
+              const Real v1z = (iz < NUM_LEV) ? v01[iz] : 0;
+              const Real v_i1 = (dz * v1z + dm * v1m) * denom;
+
               const Real grad_w_i0 = dinv00 * w0 + dinv01 * w1;
               const Real grad_w_i1 = dinv10 * w0 + dinv11 * w1;
 
-              Real wt = v_i0[iz] * grad_w_i0 + v_i1[iz] * grad_w_i1;
+              Real wt = v_i0 * grad_w_i0 + v_i1 * grad_w_i1;
               wt *= -data_scale1;
+
+              const Real pm = (iz > 0) ? pnh[iz-1] : pi_i00;
+              const Real pz = (iz < NUM_LEV) ? pnh[iz] : pm + 0.5 * dm;
+              dpnh_dp_i[iz] = 2.0 * (pz - pm) * denom;
+
               const Real scale = (iz == NUM_LEV) ? gscale1 : gscale2;
               wt += (dpnh_dp_i[iz] - 1.0) * scale;
               w_tens[iz] = wt;
 
-              Real pt = v_i0[iz] * grad_phinh_i0[iz] + v_i1[iz] * grad_phinh_i1[iz];
+              grad_phinh_i0[iz] = dinv00 * p0 + dinv01 * p1;
+              grad_phinh_i1[iz] = dinv10 * p0 + dinv11 * p1;
+              Real pt = v_i0 * grad_phinh_i0[iz] + v_i1 * grad_phinh_i1[iz];
               pt *= -data_scale1;
               pt += w_i0[iz] * gscale2;
-              pt += dscale * (v_i0[iz] * gradphis0 + v_i1[iz] * gradphis1) * hvcoord_hybrid_bi_packed[iz];
+              pt += dscale * (v_i0 * gradphis0 + v_i1 * gradphis1) * hvcoord_hybrid_bi_packed[iz];
               phi_tens[iz] = pt;
             });
         });
