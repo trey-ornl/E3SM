@@ -513,10 +513,7 @@ struct CaarFunctorImpl {
               if (last) omega_i[iz+1] = sum;
             });
 
-          Real *const pi = &buffers_pi(ie,ix,iy,0)[0];
           Real *const omega_p = &buffers_omega_p(ie,ix,iy,0)[0];
-          Real *const grad_tmp0 = &buffers_grad_tmp(ie,0,ix,iy,0)[0];
-          Real *const grad_tmp1 = &buffers_grad_tmp(ie,1,ix,iy,0)[0];
 
           const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
           const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
@@ -524,7 +521,6 @@ struct CaarFunctorImpl {
           const Real *const phinh_i0 = &state_phinh_i(ie,data_n0,ix,iy,0)[0];
 
           Real *const exner = &buffers_exner(ie,ix,iy,0)[0];
-          Real *const phi = &buffers_phi(ie,ix,iy,0)[0];
           Real *const pnh = &buffers_pnh(ie,ix,iy,0)[0];
 
           int dz = -1;
@@ -550,9 +546,8 @@ struct CaarFunctorImpl {
             [&](const int iz) {
               team.team_barrier();
 
-              pi[iz] = 0.5 * (pi_i[iz] + pi_i[iz+1]);
+              ttmp0[tr] = 0.5 * (pi_i[iz] + pi_i[iz+1]);
               omega_p[iz] = -0.5 * (omega_i[iz] + omega_i[iz+1]);
-              ttmp0[tr] = pi[iz];
 
               team.team_barrier();
 
@@ -564,12 +559,11 @@ struct CaarFunctorImpl {
               }
               d0 *= sphere_rrearth;
               d1 *= sphere_rrearth;
-              grad_tmp0[iz] = dinv00 * d0 + dinv01 * d1;
-              grad_tmp1[iz] = dinv10 * d0 + dinv11 * d1;
+              const Real grad_tmp0 = dinv00 * d0 + dinv01 * d1;
+              const Real grad_tmp1 = dinv10 * d0 + dinv11 * d1;
 
-              omega_p[iz] += v00[iz] * grad_tmp0[iz] + v01[iz] * grad_tmp1[iz];
+              omega_p[iz] += v00[iz] * grad_tmp0 + v01[iz] * grad_tmp1;
 
-              phi[iz] = 0.5 * (phinh_i0[iz+1] + phinh_i0[iz]);
               const Real dphi = phinh_i0[iz+1] - phinh_i0[iz];
               if ((vtheta_dp0[iz] < 0) || (dphi > 0)) abort();
 
@@ -700,8 +694,6 @@ struct CaarFunctorImpl {
 
           Real *const grad_phinh_i0 = &buffers_grad_phinh_i(ie,0,ix,iy,0)[0];
           Real *const grad_phinh_i1 = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
-          Real *const grad_w_i0 = &buffers_grad_w_i(ie,0,ix,iy,0)[0];
-          Real *const grad_w_i1 = &buffers_grad_w_i(ie,1,ix,iy,0)[0];
           Real *const phi_tens = &buffers_phi_tens(ie,ix,iy,0)[0];
           Real *const w_tens = &buffers_w_tens(ie,ix,iy,0)[0];
 
@@ -732,10 +724,10 @@ struct CaarFunctorImpl {
               w1 *= sphere_rrearth;
               grad_phinh_i0[iz] = dinv00 * p0 + dinv01 * p1;
               grad_phinh_i1[iz] = dinv10 * p0 + dinv11 * p1;
-              grad_w_i0[iz] = dinv00 * w0 + dinv01 * w1;
-              grad_w_i1[iz] = dinv10 * w0 + dinv11 * w1;
+              const Real grad_w_i0 = dinv00 * w0 + dinv01 * w1;
+              const Real grad_w_i1 = dinv10 * w0 + dinv11 * w1;
 
-              Real wt = v_i0[iz] * grad_w_i0[iz] + v_i1[iz] * grad_w_i1[iz];
+              Real wt = v_i0[iz] * grad_w_i0 + v_i1[iz] * grad_w_i1;
               wt *= -data_scale1;
               const Real scale = (iz == NUM_LEV) ? gscale1 : gscale2;
               wt += (dpnh_dp_i[iz] - 1.0) * scale;
@@ -784,9 +776,6 @@ struct CaarFunctorImpl {
           const Real dinv10 = sphere_dinv(ie,1,0,ix,iy);
           const Real dinv11 = sphere_dinv(ie,1,1,ix,iy);
 
-          Real *const grad_tmp0 = &buffers_grad_tmp(ie,0,ix,iy,0)[0];
-          Real *const grad_tmp1 = &buffers_grad_tmp(ie,1,ix,iy,0)[0];
-
           const Real *const vtheta_dp0 = &state_vtheta_dp(ie,data_n0,ix,iy,0)[0];
 
           Real *const dp_tens = &buffers_dp_tens(ie,ix,iy,0)[0];
@@ -809,13 +798,13 @@ struct CaarFunctorImpl {
               }
               t0 *= sphere_rrearth;
               t1 *= sphere_rrearth;
-              grad_tmp0[iz] = dinv00 * t0 + dinv01 * t1;
-              grad_tmp1[iz] = dinv10 * t0 + dinv11 * t1;
+              const Real grad_tmp0 = dinv00 * t0 + dinv01 * t1;
+              const Real grad_tmp1 = dinv10 * t0 + dinv11 * t1;
 
               dp_tens[iz] = div_vdp[iz];
 
               Real tt = div_vdp[iz] * ttmp0[tr];
-              tt += grad_tmp0[iz] * vdp0[iz] + grad_tmp1[iz] * vdp1[iz];
+              tt += grad_tmp0 * vdp0[iz] + grad_tmp1 * vdp1[iz];
               theta_tens[iz] = tt;
 
               team.team_barrier();
