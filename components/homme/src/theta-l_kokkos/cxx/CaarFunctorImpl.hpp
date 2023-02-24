@@ -495,7 +495,8 @@ struct CaarFunctorImpl {
           const Real *const dp3d0 = &state_dp3d(ie,data_n0,ix,iy,0)[0];
           const Real *const div_vdp = &buffers_div_vdp(ie,ix,iy,0)[0];
 
-          Real *const pi_i = &buffers_grad_phinh_i(ie,1,ix,iy,0)[0];
+          Real *const ptmp0 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_POINT));
+          Real *const pi_i = ptmp0 + tr * NUM_LEV_P;
           Kokkos::parallel_scan(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz, Real &sum, const bool last) {
@@ -504,7 +505,8 @@ struct CaarFunctorImpl {
               if (last) pi_i[iz+1] = sum;
             });
 
-          Real *const omega_i = &buffers_grad_phinh_i(ie,0,ix,iy,0)[0];
+          Real *const ptmp1 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_POINT));
+          Real *const omega_i = ptmp1 + tr * NUM_LEV_P;
           Kokkos::parallel_scan(
             Kokkos::ThreadVectorRange(team, NUM_LEV),
             [&](const int iz, Real &sum, const bool last) {
