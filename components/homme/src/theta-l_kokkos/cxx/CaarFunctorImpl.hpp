@@ -442,9 +442,12 @@ struct CaarFunctorImpl {
           const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
           const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
           const Real *const dp3d0 = &state_dp3d(ie,data_n0,ix,iy,0)[0];
+
           Real *const vdp0 = &buffers_vdp(ie,0,ix,iy,0)[0];
           Real *const vdp1 = &buffers_vdp(ie,1,ix,iy,0)[0];
           Real *const div_vdp = &buffers_div_vdp(ie,ix,iy,0)[0];
+          Real *const dvn00 = &derived_vn0(ie,0,ix,iy,0)[0];
+          Real *const dvn01 = &derived_vn0(ie,1,ix,iy,0)[0];
 
           const Real dinv00 = sphere_dinv(ie,0,0,ix,iy);
           const Real dinv01 = sphere_dinv(ie,0,1,ix,iy);
@@ -464,6 +467,9 @@ struct CaarFunctorImpl {
 
               vdp0[iz] = v0;
               vdp1[iz] = v1;
+
+              dvn00[iz] += data_eta_ave_w * v0;
+              dvn01[iz] += data_eta_ave_w * v1;
 
               ttmp0[tr] = (dinv00 * v0 + dinv10 * v1) * metdet;
               ttmp1[tr] = (dinv01 * v0 + dinv11 * v1) * metdet;
@@ -515,16 +521,6 @@ struct CaarFunctorImpl {
               if (last) omega_i[iz+1] = sum;
             });
 
-          Real *const omega_p = &buffers_omega_p(ie,ix,iy,0)[0];
-
-          const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
-          const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
-          const Real *const vtheta_dp0 = &state_vtheta_dp(ie,data_n0,ix,iy,0)[0];
-          const Real *const phinh_i0 = &state_phinh_i(ie,data_n0,ix,iy,0)[0];
-
-          Real *const exner = &buffers_exner(ie,ix,iy,0)[0];
-          Real *const pnh = &buffers_pnh(ie,ix,iy,0)[0];
-
           int dz = -1;
           Kokkos::parallel_for(
             Kokkos::ThreadVectorRange(team, WARP_SIZE),
@@ -538,6 +534,15 @@ struct CaarFunctorImpl {
           Real *const ttmp00 = reinterpret_cast<Real *>(team.team_shmem().get_shmem(REAL_PER_THREAD));
           Real *const ttmp0 = ttmp00 + dz * NPNP;
 
+          const Real *const v00 = &state_v(ie,data_n0,0,ix,iy,0)[0];
+          const Real *const v01 = &state_v(ie,data_n0,1,ix,iy,0)[0];
+          const Real *const vtheta_dp0 = &state_vtheta_dp(ie,data_n0,ix,iy,0)[0];
+          const Real *const phinh_i0 = &state_phinh_i(ie,data_n0,ix,iy,0)[0];
+
+          Real *const domega_p = &derived_omega_p(ie,ix,iy,0)[0];
+          Real *const exner = &buffers_exner(ie,ix,iy,0)[0];
+          Real *const pnh = &buffers_pnh(ie,ix,iy,0)[0];
+
           const Real dinv00 = sphere_dinv(ie,0,0,ix,iy);
           const Real dinv01 = sphere_dinv(ie,0,1,ix,iy);
           const Real dinv10 = sphere_dinv(ie,1,0,ix,iy);
@@ -549,7 +554,6 @@ struct CaarFunctorImpl {
               team.team_barrier();
 
               ttmp0[tr] = 0.5 * (pi_i[iz] + pi_i[iz+1]);
-              omega_p[iz] = -0.5 * (omega_i[iz] + omega_i[iz+1]);
 
               team.team_barrier();
 
@@ -564,7 +568,9 @@ struct CaarFunctorImpl {
               const Real grad_tmp0 = dinv00 * d0 + dinv01 * d1;
               const Real grad_tmp1 = dinv10 * d0 + dinv11 * d1;
 
-              omega_p[iz] += v00[iz] * grad_tmp0 + v01[iz] * grad_tmp1;
+              Real omega_p = v00[iz] * grad_tmp0 + v01[iz] * grad_tmp1;
+              omega_p -= 0.5 * (omega_i[iz] + omega_i[iz+1]);
+              domega_p[iz] += data_eta_ave_w * omega_p;
 
               const Real dphi = phinh_i0[iz+1] - phinh_i0[iz];
               if ((vtheta_dp0[iz] < 0) || (dphi > 0)) abort();
@@ -628,35 +634,7 @@ struct CaarFunctorImpl {
               dpnh_dp_i[iz+1] = (pnh[iz+1] - pnh[iz]) / dp_i[iz+1];
             });
         });
-
-      // TREY compute_accumulated_quantities
-      Kokkos::parallel_for(
-        "caar loop pre-boundary exchange lambda",
-        TeamPolicy(m_num_elems, NPNP, WARP_SIZE),
-        KOKKOS_LAMBDA(const Team &team) {
-
-          const int ie = team.league_rank();
-          const int tr = team.team_rank();
-          const int ix = tr / NP;
-          const int iy = tr % NP;
-
-          const Real *const vdp0 = &buffers_vdp(ie,0,ix,iy,0)[0];
-          const Real *const vdp1 = &buffers_vdp(ie,1,ix,iy,0)[0];
-          const Real *const omega_p = &buffers_omega_p(ie,ix,iy,0)[0];
-
-          Real *const domega_p = &derived_omega_p(ie,ix,iy,0)[0];
-          Real *const dvn00 = &derived_vn0(ie,0,ix,iy,0)[0];
-          Real *const dvn01 = &derived_vn0(ie,1,ix,iy,0)[0];
-
-          Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(team, NUM_LEV),
-            [&](const int iz) {
-              domega_p[iz] += data_eta_ave_w * omega_p[iz];
-              dvn00[iz] += data_eta_ave_w * vdp0[iz];
-              dvn01[iz] += data_eta_ave_w * vdp1[iz];
-            });
-        });
-
+      
       // TREY compute_w_and_phi_tens
       Kokkos::parallel_for(
         "caar loop pre-boundary exchange lambda",
