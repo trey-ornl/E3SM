@@ -602,36 +602,29 @@ struct CaarFunctorImpl {
           const Real *const dp3d0 = &state_dp3d(ie,data_n0,ix,iy,0)[0];
           const Real *const pnh = &buffers_pnh(ie,ix,iy,0)[0];
 
-          Real *const dp_i = &buffers_dp_i(ie,ix,iy,0)[0];
-
-          dp_i[0] = dp3d0[0];
-          dp_i[NUM_LEV] = dp3d0[NUM_LEV-1];
-
           Real *const v_i0 = &buffers_v_i(ie,0,ix,iy,0)[0];
           Real *const v_i1 = &buffers_v_i(ie,1,ix,iy,0)[0];
-
-          v_i0[0] = v00[0];
-          v_i1[0] = v01[0];
-
-          v_i0[NUM_LEV] = v00[NUM_LEV-1];
-          v_i1[NUM_LEV] = v01[NUM_LEV-1];
-
           Real *const dpnh_dp_i = &buffers_dpnh_dp_i(ie,ix,iy,0)[0];
-
-          dpnh_dp_i[0] = 2.0 * (pnh[0] - pi_i00) / dp_i[0];
-          const Real pnh_last = pnh[NUM_LEV-1];
-          const Real dp_last = dp_i[NUM_LEV];
-          const Real pnh_i_last = pnh_last + 0.5 * dp_last;
-          dpnh_dp_i[NUM_LEV] = 2.0 * (pnh_i_last - pnh_last) / dp_last;
-
+        
           Kokkos::parallel_for(
-            Kokkos::ThreadVectorRange(team, NUM_LEV-1),
+            Kokkos::ThreadVectorRange(team, NUM_LEV_P),
             [&] (const int iz) {
-              dp_i[iz+1] = 0.5 * (dp3d0[iz] + dp3d0[iz+1]);
-              const Real denom = 1.0 / (2.0 * dp_i[iz+1]);
-              v_i0[iz+1] = (dp3d0[iz+1] * v00[iz+1] + dp3d0[iz] * v00[iz]) * denom;
-              v_i1[iz+1] = (dp3d0[iz+1] * v01[iz+1] + dp3d0[iz] * v01[iz]) * denom;
-              dpnh_dp_i[iz+1] = (pnh[iz+1] - pnh[iz]) / dp_i[iz+1];
+
+              const Real dm = (iz > 0) ? dp3d0[iz-1] : 0;
+              const Real dz = (iz < NUM_LEV) ? dp3d0[iz] : 0;
+              const Real denom = 1.0 / (dz + dm);
+
+              const Real pm = (iz > 0) ? pnh[iz-1] : pi_i00;
+              const Real pz = (iz < NUM_LEV) ? pnh[iz] : pm + 0.5 * dm;
+              dpnh_dp_i[iz] = 2.0 * (pz - pm) * denom;
+
+              const Real v0m = (iz > 0) ? v00[iz-1] : 0;
+              const Real v0z = (iz < NUM_LEV) ? v00[iz] : 0;
+              v_i0[iz] = (dz * v0z + dm * v0m) * denom;
+
+              const Real v1m = (iz > 0) ? v01[iz-1] : 0;
+              const Real v1z = (iz < NUM_LEV) ? v01[iz] : 0;
+              v_i1[iz] = (dz * v1z + dm * v1m) * denom;
             });
         });
       
