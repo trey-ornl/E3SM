@@ -336,9 +336,7 @@ struct CaarFunctorImpl {
 
     GPTLstart("caar compute");
 
-//#define TREYPRINT
-#define TREY
-#ifdef TREY
+    int nerr = 0;
     if ((m_rsplit > 0) && (!m_theta_hydrostatic_mode) && (m_theta_advection_form == AdvectionForm::NonConservative)) {
 
       static_assert(VECTOR_SIZE == 1, "VECTOR_SIZE != 1");
@@ -353,25 +351,14 @@ struct CaarFunctorImpl {
       using TeamPolicy = Kokkos::TeamPolicy<ExecSpace>;
       using Team = TeamPolicy::member_type;
 
-      auto &buffers_div_vdp = m_buffers.div_vdp;
-      auto &buffers_dp_i = m_buffers.dp_i;
       auto &buffers_dp_tens = m_buffers.dp_tens;
       auto &buffers_dpnh_dp_i = m_buffers.dpnh_dp_i;
       auto &buffers_exner = m_buffers.exner;
       auto &buffers_grad_phinh_i = m_buffers.grad_phinh_i;
-      auto &buffers_grad_tmp = m_buffers.grad_tmp;
-      auto &buffers_grad_w_i = m_buffers.grad_w_i;
-      auto &buffers_omega_p = m_buffers.omega_p;
-      auto &buffers_phi = m_buffers.phi;
       auto &buffers_phi_tens = m_buffers.phi_tens;
-      auto &buffers_pi = m_buffers.pi;
       auto &buffers_pnh = m_buffers.pnh;
-      auto &buffers_temp = m_buffers.temp;
       auto &buffers_theta_tens = m_buffers.theta_tens;
-      auto &buffers_v_i = m_buffers.v_i;
       auto &buffers_v_tens = m_buffers.v_tens;
-      auto &buffers_vdp = m_buffers.vdp;
-      auto &buffers_vort = m_buffers.vort;
       auto &buffers_w_tens = m_buffers.w_tens;
 
       const Real data_dt = m_data.dt;
@@ -411,9 +398,9 @@ struct CaarFunctorImpl {
       const Real pi_i00 = m_hvcoord.ps0*m_hvcoord.hybrid_ai0;
       const Real scale1_dt = m_data.scale1 * m_data.dt;
 
-      // TREY compute_div_vdp
-      // TREY compute_scan_quantities
-      // TREY compute_dp_and_theta_tens
+      // compute_div_vdp
+      // compute_scan_quantities
+      // compute_dp_and_theta_tens
       Kokkos::parallel_for(
         "caar loop pre-boundary exchange lambda",
         TeamPolicy(m_num_elems, NPNP, WARP_SIZE).
@@ -576,8 +563,8 @@ struct CaarFunctorImpl {
             });
         });
 
-      // TREY compute_interface_quantities
-      // TREY compute_w_and_phi_tens
+      // compute_interface_quantities
+      // compute_w_and_phi_tens
       Kokkos::parallel_for(
         "caar loop pre-boundary exchange lambda",
         TeamPolicy(m_num_elems, NPNP, WARP_SIZE).
@@ -684,7 +671,7 @@ struct CaarFunctorImpl {
             });
         });
 
-      // TREY compute_v_tens
+      // compute_v_tens
       Kokkos::parallel_for(
         "caar loop pre-boundary exchange lambda",
         TeamPolicy(m_num_elems, NPNP, WARP_SIZE).
@@ -867,7 +854,7 @@ struct CaarFunctorImpl {
             });
         });
 
-      // TREY np1
+      // np1
       Kokkos::parallel_for(
         "caar loop pre-boundary exchange lambda",
         TeamPolicy(m_num_elems * NPNP, NUM_LEV),
@@ -917,21 +904,13 @@ struct CaarFunctorImpl {
           Real *const v1_np1 = &state_v(ie,data_np1,1,ix,iy,0)[0];
           v1_np1[iz] = v1_nm1[iz] * scale3_spheremp - v_tens1[iz] * scale1_dt_spheremp;
         });
-    }
-#endif
 
-    int nerr = 0;
-#if defined(TREYPRINT) || not defined(TREY)
-    Kokkos::parallel_reduce("caar loop pre-boundary exchange", m_policy_pre, *this, nerr);
-#endif
-    Kokkos::fence();
-#ifdef TREYPRINT
-    if (m_data.n0 == 2) {
-      printf("TREY %s %s\n", __DATE__, __TIME__);
-      fflush(stdout);
-      exit(0);
+    } else {
+
+      Kokkos::parallel_reduce("caar loop pre-boundary exchange", m_policy_pre, *this, nerr);
+
     }
-#endif
+    Kokkos::fence();
     GPTLstop("caar compute");
     if (nerr > 0)
       check_print_abort_on_bad_elems("CaarFunctorImpl::run TagPreExchange", data.n0);
@@ -963,7 +942,6 @@ struct CaarFunctorImpl {
 
     KernelVariables kv(team, m_tu);
 
-#ifndef TREY
     // =========== EPOCH 1 =========== //
     compute_div_vdp(kv);
 
@@ -1011,34 +989,6 @@ struct CaarFunctorImpl {
     // v_tens has been computed after last barrier. Need to make sure it's done
     kv.team_barrier();
     compute_v_np1(kv);
-#endif
-
-#ifdef TREYPRINT
-    kv.team_barrier();
-    Kokkos::parallel_for(
-      Kokkos::TeamThreadRange(kv.team,NP*NP),
-      [&](const int idx) {
-        const int igp = idx / NP;
-        const int jgp = idx % NP;
-        Kokkos::parallel_for(
-          Kokkos::ThreadVectorRange(kv.team,NUM_LEV),
-          [&](const int ilev) {
-            printf("TREY %d %d %d %d %d do %g dv %g %g dp %g\n",
-                   m_data.np1,kv.ie,igp,jgp,ilev,
-                   m_derived.m_omega_p(kv.ie,igp,jgp,ilev)[0],
-                   m_derived.m_vn0(kv.ie,0,igp,jgp,ilev)[0],
-                   m_derived.m_vn0(kv.ie,1,igp,jgp,ilev)[0],
-                   m_state.m_dp3d(kv.ie,m_data.np1,igp,jgp,ilev)[0]);
-            printf("TREY %d %d %d %d %d wi %g ph %g vt %g v %g %g\n",
-                   m_data.np1,kv.ie,igp,jgp,ilev,
-                   m_state.m_w_i(kv.ie,m_data.np1,igp,jgp,ilev)[0],
-                   m_state.m_phinh_i(kv.ie,m_data.np1,igp,jgp,ilev)[0],
-                   m_state.m_vtheta_dp(kv.ie,m_data.np1,igp,jgp,ilev)[0],
-                   m_state.m_v(kv.ie,m_data.np1,0,igp,jgp,ilev)[0],
-                   m_state.m_v(kv.ie,m_data.np1,1,igp,jgp,ilev)[0]);
-          });
-      });
-#endif
   }
 
   KOKKOS_INLINE_FUNCTION

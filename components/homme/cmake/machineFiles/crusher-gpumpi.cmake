@@ -52,7 +52,7 @@ SET(CMAKE_CXX_COMPILER "hipcc" CACHE STRING "")
 
 #SET(ADD_Fortran_FLAGS "-O3 -DNDEBUG ${Extrae_LIBRARY}" CACHE STRING "")
 SET(ADD_C_FLAGS "-ggdb -O3" CACHE STRING "")
-SET(ADD_CXX_FLAGS "-O3 -DNDEBUG --amdgpu-target=gfx90a -fno-gpu-rdc -I$ENV{MPICH_DIR}/include" CACHE STRING "")
+SET(ADD_CXX_FLAGS "-O3 -DNDEBUG --offload-arch=gfx90a -fno-gpu-rdc -I$ENV{MPICH_DIR}/include" CACHE STRING "")
 SET(ADD_LINKER_FLAGS "-ggdb -O3 -L$ENV{ROCM_PATH}/lib -lamdhip64" CACHE STRING "")
 
 
